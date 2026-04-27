@@ -61,6 +61,8 @@ import {
   Users,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Check,
 } from "lucide-react"
 
 const PAGE_SIZE = 10
@@ -93,6 +95,7 @@ export function ChannelsPage() {
   const [permDialogOpen, setPermDialogOpen] = useState(false)
   const [permChannel, setPermChannel] = useState<ChannelOut | null>(null)
   const [permissionUserIds, setPermissionUserIds] = useState<string[]>([])
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ["channels", page],
@@ -320,6 +323,24 @@ export function ChannelsPage() {
                   </TableCell>
                   <TableCell className="py-3 text-right">
                     <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => {
+                          navigator.clipboard.writeText(channel.id)
+                          setCopiedId(channel.id)
+                          toast.success("渠道 ID 已复制")
+                          setTimeout(() => setCopiedId(null), 1500)
+                        }}
+                        title="复制渠道 ID"
+                      >
+                        {copiedId === channel.id ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-500" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
                       {isAdmin && (
                         <>
                           <Button

@@ -23,6 +23,7 @@ import {
   Activity,
   BarChart3,
   PieChartIcon,
+  BookOpen,
 } from "lucide-react"
 import {
   getDashboardStats,
@@ -77,19 +78,19 @@ function StatCard({
 }) {
   return (
     <Card className="border-border/60 bg-card">
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="flex items-start justify-between">
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">{title}</p>
             {isLoading ? (
-              <Skeleton className="h-9 w-24" />
+              <Skeleton className="h-7 w-20" />
             ) : (
-              <p className="text-3xl font-bold tracking-tight text-foreground">{value}</p>
+              <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
             )}
-            <p className="text-xs text-muted-foreground">{subtitle}</p>
+            <p className="text-[11px] text-muted-foreground">{subtitle}</p>
           </div>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary">
-            <Icon className="h-4 w-4 text-muted-foreground" />
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-secondary">
+            <Icon className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
         </div>
       </CardContent>
@@ -125,9 +126,10 @@ export function DashboardPage() {
           {getGreeting()}，{user?.display_name ?? "用户"}
         </h1>
         <ToggleGroup
-          type="single"
-          value={timeRange}
-          onValueChange={(v) => v && setTimeRange(v)}
+          value={[timeRange]}
+          onValueChange={(v) => {
+            if (v.length > 0) setTimeRange(v[0])
+          }}
           className="rounded-lg border border-border bg-card p-0.5"
         >
           <ToggleGroupItem
@@ -289,6 +291,55 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* API Documentation */}
+      <Card className="border-border/60 bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <BookOpen className="h-4 w-4 text-muted-foreground" />
+            使用文档
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">推送接口</p>
+            <div className="flex items-center gap-2 rounded-md bg-secondary/50 px-3 py-2 font-mono text-xs text-foreground">
+              <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">POST</span>
+              <span>/api/v1/push</span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">请求头</p>
+            <pre className="overflow-x-auto rounded-md bg-secondary/50 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+{`Content-Type: application/json
+Authorization: Bearer <Your-Push-Key>`}
+            </pre>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">请求体</p>
+            <pre className="overflow-x-auto rounded-md bg-secondary/50 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+{`{
+  "title": "通知标题",
+  "content": "消息内容",
+  "type": "text",
+  "channel_ids": ["channel-uuid-1", "channel-uuid-2"] // 可选，默认使用推送密钥的默认渠道
+}`}
+            </pre>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">cURL 示例</p>
+            <pre className="overflow-x-auto rounded-md bg-secondary/50 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+{`curl -X POST https://your-domain.com/api/v1/push \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer <Your-Push-Key>" \\
+  -d '{"title":"通知","content":"测试消息","type":"text","channel_ids":["channel-uuid-1"]}'`}
+            </pre>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
