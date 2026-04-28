@@ -122,7 +122,7 @@ export function DashboardCharts({ days }: { days: number }) {
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <PieChartIcon className="h-4 w-4 text-muted-foreground" />
-            渠道使用率
+            通道使用率
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">

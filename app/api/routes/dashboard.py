@@ -168,10 +168,16 @@ async def get_dashboard_requests(
     return filled
 
 
-_CHANNEL_COLORS: dict[str, str] = {
-    "wecom_bot": "#3b82f6",
-    "dingtalk_bot": "#10b981",
-}
+_CHANNEL_COLORS = [
+    "#3b82f6",
+    "#10b981",
+    "#f59e0b",
+    "#8b5cf6",
+    "#ef4444",
+    "#06b6d4",
+    "#f97316",
+    "#84cc16",
+]
 
 
 @router.get("/channels", response_model=list[ChannelUsage])
@@ -181,7 +187,8 @@ async def get_dashboard_channels(
 ) -> list[ChannelUsage]:
     query = (
         select(
-            Channel.type.label("channel_type"),
+            Channel.id.label("channel_id"),
+            Channel.name.label("channel_name"),
             func.count().label("count"),
         )
         .join(Delivery, Delivery.channel_id == Channel.id)
@@ -189,7 +196,8 @@ async def get_dashboard_channels(
             Channel.is_deleted.is_(False),
             Channel.is_enabled.is_(True),
         )
-        .group_by(Channel.type)
+        .group_by(Channel.id, Channel.name)
+        .order_by(func.count().desc(), Channel.name.asc())
     )
 
     if current_user.role.value != "admin":
@@ -202,11 +210,11 @@ async def get_dashboard_channels(
 
     return [
         ChannelUsage(
-            name=row.channel_type,
+            name=row.channel_name,
             value=row.count,
-            color=_CHANNEL_COLORS.get(row.channel_type, "#8b5cf6"),
+            color=_CHANNEL_COLORS[index % len(_CHANNEL_COLORS)],
         )
-        for row in rows
+        for index, row in enumerate(rows)
     ]
 
 

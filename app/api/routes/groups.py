@@ -23,14 +23,47 @@ from app.services.serializers import group_to_out
 router = APIRouter(prefix="/groups", tags=["groups"])
 
 
+def _parse_csv_values(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return list(dict.fromkeys(items)) or None
+
+
+def _parse_status_filters(value: str | None) -> list[bool] | None:
+    values = _parse_csv_values(value)
+    if not values:
+        return None
+    mapping = {"active": True, "inactive": False}
+    try:
+        return list(dict.fromkeys(mapping[item] for item in values))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid status filter: {exc.args[0]}",
+        ) from exc
+
+
 @router.get("", response_model=GroupListOut)
 async def get_groups(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    q: str | None = Query(default=None, min_length=1, max_length=128),
+    statuses: str | None = Query(default=None, max_length=128),
+    member_user_ids: str | None = Query(default=None, max_length=2048),
+    channel_ids: str | None = Query(default=None, max_length=2048),
     _: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> GroupListOut:
-    items, total = await list_groups(session, offset, limit)
+    items, total = await list_groups(
+        session,
+        offset,
+        limit,
+        q=q,
+        statuses=_parse_status_filters(statuses),
+        member_user_ids=_parse_csv_values(member_user_ids),
+        channel_ids=_parse_csv_values(channel_ids),
+    )
     return GroupListOut(items=[group_to_out(item) for item in items], total=total)
 
 

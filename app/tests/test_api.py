@@ -22,6 +22,36 @@ async def create_channel_via_api(client, admin_headers, name: str, type_: str) -
     return response.json()
 
 
+async def authorize_channels_for_user_via_group(
+    client,
+    admin_headers,
+    user_id: str,
+    group_name: str,
+    channel_ids: list[str],
+) -> str:
+    group_response = await client.post(
+        "/api/v1/groups",
+        headers=admin_headers,
+        json={"name": group_name, "description": group_name},
+    )
+    assert group_response.status_code == 201
+    group_id = group_response.json()["id"]
+
+    for channel_id in channel_ids:
+        grant_channel = await client.post(
+            f"/api/v1/groups/{group_id}/channels/{channel_id}",
+            headers=admin_headers,
+        )
+        assert grant_channel.status_code == 200
+
+    grant_member = await client.post(
+        f"/api/v1/groups/{group_id}/members/{user_id}",
+        headers=admin_headers,
+    )
+    assert grant_member.status_code == 200
+    return group_id
+
+
 async def test_admin_channel_authorization_and_push_flow(
     client,
     session_factory,
@@ -37,16 +67,13 @@ async def test_admin_channel_authorization_and_push_flow(
         client, admin_headers, "wecom", ChannelType.WECOM_BOT.value
     )
 
-    grant = await client.post(
-        f"/api/v1/channels/{ding['id']}/permissions/{normal_user.id}",
-        headers=admin_headers,
+    await authorize_channels_for_user_via_group(
+        client,
+        admin_headers,
+        normal_user.id,
+        "auth-flow-group",
+        [ding["id"], wecom["id"]],
     )
-    assert grant.status_code == 200
-    grant = await client.post(
-        f"/api/v1/channels/{wecom['id']}/permissions/{normal_user.id}",
-        headers=admin_headers,
-    )
-    assert grant.status_code == 200
 
     key_response = await client.post(
         "/api/v1/push-keys",
@@ -113,11 +140,13 @@ async def test_push_key_rate_limit_and_disable(
     ding = await create_channel_via_api(
         client, admin_headers, "limit-ding", ChannelType.DINGTALK_BOT.value
     )
-    grant = await client.post(
-        f"/api/v1/channels/{ding['id']}/permissions/{normal_user.id}",
-        headers=admin_headers,
+    await authorize_channels_for_user_via_group(
+        client,
+        admin_headers,
+        normal_user.id,
+        "limit-group",
+        [ding["id"]],
     )
-    assert grant.status_code == 200
 
     key_response = await client.post(
         "/api/v1/push-keys",
@@ -170,11 +199,13 @@ async def test_post_push_rejects_oversized_content(
     ding = await create_channel_via_api(
         client, admin_headers, "oversize-ding", ChannelType.DINGTALK_BOT.value
     )
-    grant = await client.post(
-        f"/api/v1/channels/{ding['id']}/permissions/{normal_user.id}",
-        headers=admin_headers,
+    await authorize_channels_for_user_via_group(
+        client,
+        admin_headers,
+        normal_user.id,
+        "oversize-group",
+        [ding["id"]],
     )
-    assert grant.status_code == 200
 
     key_response = await client.post(
         "/api/v1/push-keys",
@@ -220,12 +251,13 @@ async def test_dashboard_stats_counts_authorized_channels_for_normal_user(
         client, admin_headers, "stats-hidden", ChannelType.DINGTALK_BOT.value
     )
 
-    for channel in (ding, wecom):
-        grant = await client.post(
-            f"/api/v1/channels/{channel['id']}/permissions/{normal_user.id}",
-            headers=admin_headers,
-        )
-        assert grant.status_code == 200
+    await authorize_channels_for_user_via_group(
+        client,
+        admin_headers,
+        normal_user.id,
+        "stats-group",
+        [ding["id"], wecom["id"]],
+    )
 
     user_stats = await client.get("/api/v1/dashboard/stats", headers=user_headers)
     admin_stats = await client.get("/api/v1/dashboard/stats", headers=admin_headers)
@@ -300,11 +332,13 @@ async def test_message_filters_export_replay_and_retry(
     channel = await create_channel_via_api(
         client, admin_headers, "message-ops", ChannelType.GENERIC_WEBHOOK.value
     )
-    grant = await client.post(
-        f"/api/v1/channels/{channel['id']}/permissions/{normal_user.id}",
-        headers=admin_headers,
+    await authorize_channels_for_user_via_group(
+        client,
+        admin_headers,
+        normal_user.id,
+        "message-filter-group",
+        [channel["id"]],
     )
-    assert grant.status_code == 200
 
     key_response = await client.post(
         "/api/v1/push-keys",
@@ -339,6 +373,8 @@ async def test_message_filters_export_replay_and_retry(
     )
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 1
+    assert filtered.json()["items"][0]["user_display_name"] == normal_user.display_name
+    assert filtered.json()["items"][0]["channel_names"] == [channel["name"]]
 
     exported = await client.get(
         "/api/v1/messages/export",
@@ -451,6 +487,96 @@ async def test_group_permissions_enable_channel_access_and_audit_logs(
         assert len(group_audits) >= 4
 
 
+async def test_user_group_assignment_filters_and_push_key_delete(
+    client,
+    fake_redis,
+    admin_headers,
+    user_headers,
+    normal_user,
+) -> None:
+    group_response = await client.post(
+        "/api/v1/groups",
+        headers=admin_headers,
+        json={"name": "filter-group", "description": "filters"},
+    )
+    assert group_response.status_code == 201
+    group_id = group_response.json()["id"]
+
+    created_user = await client.post(
+        "/api/v1/users",
+        headers=admin_headers,
+        json={
+          "username": "filter-user",
+          "display_name": "Filter User",
+          "password": "filter-user-pass",
+          "role": "user",
+          "group_ids": [group_id],
+        },
+    )
+    assert created_user.status_code == 201
+    assert created_user.json()["group_ids"] == [group_id]
+
+    filtered_users = await client.get(
+        "/api/v1/users",
+        headers=admin_headers,
+        params={"group_ids": group_id, "statuses": "active"},
+    )
+    assert filtered_users.status_code == 200
+    assert filtered_users.json()["total"] >= 1
+
+    updated_user = await client.patch(
+        f"/api/v1/users/{normal_user.id}",
+        headers=admin_headers,
+        json={"group_ids": [group_id]},
+    )
+    assert updated_user.status_code == 200
+    assert updated_user.json()["group_ids"] == [group_id]
+
+    filtered_groups = await client.get(
+        "/api/v1/groups",
+        headers=admin_headers,
+        params={"member_user_ids": normal_user.id},
+    )
+    assert filtered_groups.status_code == 200
+    assert any(item["id"] == group_id for item in filtered_groups.json()["items"])
+
+    channel = await create_channel_via_api(
+        client, admin_headers, "delete-key-channel", ChannelType.GENERIC_WEBHOOK.value
+    )
+    grant_channel = await client.post(
+        f"/api/v1/groups/{group_id}/channels/{channel['id']}",
+        headers=admin_headers,
+    )
+    assert grant_channel.status_code == 200
+
+    key_response = await client.post(
+        "/api/v1/push-keys",
+        headers=user_headers,
+        json={
+            "business_name": "delete-key",
+            "per_minute_limit": 5,
+            "channel_ids": [channel["id"]],
+            "default_channel_id": channel["id"],
+        },
+    )
+    assert key_response.status_code == 201
+
+    push_response = await client.post(
+        "/api/v1/push",
+        headers={"Authorization": f"Bearer {key_response.json()['plaintext_key']}"},
+        json={"title": "cleanup", "content": "cleanup", "type": MessageType.TEXT.value},
+    )
+    assert push_response.status_code == 200
+    assert len(fake_redis.jobs) >= 1
+
+    deleted = await client.delete(
+        f"/api/v1/push-keys/{key_response.json()['id']}",
+        headers=user_headers,
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["id"] == key_response.json()["id"]
+
+
 async def test_push_idempotency_key_deduplicates_requests(
     client,
     session_factory,
@@ -465,11 +591,13 @@ async def test_push_idempotency_key_deduplicates_requests(
         "idem-channel",
         ChannelType.WECOM_BOT.value,
     )
-    grant = await client.post(
-        f"/api/v1/channels/{channel['id']}/permissions/{normal_user.id}",
-        headers=admin_headers,
+    await authorize_channels_for_user_via_group(
+        client,
+        admin_headers,
+        normal_user.id,
+        "idem-group",
+        [channel["id"]],
     )
-    assert grant.status_code == 200
 
     key_response = await client.post(
         "/api/v1/push-keys",
@@ -590,6 +718,7 @@ async def test_dashboard_detail_endpoints(
     hot_keys = await client.get("/api/v1/dashboard/hot-keys", headers=admin_headers)
     error_reasons = await client.get("/api/v1/dashboard/error-reasons", headers=admin_headers)
     channel_perf = await client.get("/api/v1/dashboard/channel-performance", headers=admin_headers)
+    channel_usage = await client.get("/api/v1/dashboard/channels", headers=admin_headers)
 
     assert hot_keys.status_code == 200
     assert hot_keys.json()[0]["business_name"] == "dash-key"
@@ -597,3 +726,5 @@ async def test_dashboard_detail_endpoints(
     assert error_reasons.json()[0]["reason"] == "seed error"
     assert channel_perf.status_code == 200
     assert channel_perf.json()[0]["channel_name"] == "dash-channel"
+    assert channel_usage.status_code == 200
+    assert channel_usage.json()[0]["name"] == "dash-channel"

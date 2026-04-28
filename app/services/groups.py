@@ -19,11 +19,47 @@ async def list_groups(
     session: AsyncSession,
     offset: int = 0,
     limit: int = 50,
+    q: str | None = None,
+    statuses: list[bool] | None = None,
+    member_user_ids: list[str] | None = None,
+    channel_ids: list[str] | None = None,
 ) -> tuple[list[UserGroup], int]:
-    total = await session.scalar(select(func.count()).select_from(UserGroup))
+    query = select(UserGroup)
+    count_query = select(func.count(func.distinct(UserGroup.id))).select_from(UserGroup)
+
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.where(UserGroup.name.ilike(pattern) | UserGroup.description.ilike(pattern))
+        count_query = count_query.where(
+            UserGroup.name.ilike(pattern) | UserGroup.description.ilike(pattern)
+        )
+
+    if statuses:
+        query = query.where(UserGroup.is_active.in_(statuses))
+        count_query = count_query.where(UserGroup.is_active.in_(statuses))
+
+    if member_user_ids:
+        query = query.join(UserGroupMember, UserGroupMember.group_id == UserGroup.id).where(
+            UserGroupMember.user_id.in_(member_user_ids)
+        )
+        count_query = count_query.join(
+            UserGroupMember, UserGroupMember.group_id == UserGroup.id
+        ).where(UserGroupMember.user_id.in_(member_user_ids))
+
+    if channel_ids:
+        query = query.join(
+            UserGroupChannelPermission,
+            UserGroupChannelPermission.group_id == UserGroup.id,
+        ).where(UserGroupChannelPermission.channel_id.in_(channel_ids))
+        count_query = count_query.join(
+            UserGroupChannelPermission,
+            UserGroupChannelPermission.group_id == UserGroup.id,
+        ).where(UserGroupChannelPermission.channel_id.in_(channel_ids))
+
+    total = await session.scalar(count_query)
     result = await session.scalars(
-        select(UserGroup)
-        .options(*group_load_options())
+        query.options(*group_load_options())
+        .distinct()
         .order_by(UserGroup.created_at.desc())
         .offset(offset)
         .limit(limit)

@@ -1,5 +1,5 @@
 from app.models.audit import AuditLog
-from app.models.channel import Channel, UserChannelPermission
+from app.models.channel import Channel
 from app.models.group import UserGroup, UserGroupChannelPermission, UserGroupMember
 from app.models.message import Delivery, Message
 from app.models.push_key import PushKey, PushKeyChannel
@@ -16,5 +16,4 @@ __all__ = [
     "UserGroup",
     "UserGroupChannelPermission",
     "UserGroupMember",
-    "UserChannelPermission",
 ]

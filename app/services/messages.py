@@ -34,6 +34,7 @@ RETRY_DELAYS = [30, 120, 600]
 
 def message_load_options():
     return (
+        selectinload(Message.user),
         selectinload(Message.push_key),
         selectinload(Message.deliveries).selectinload(Delivery.channel),
     )
@@ -173,7 +174,7 @@ async def get_message_list(
     offset: int = 0,
     limit: int = 50,
     q: str | None = None,
-    status_filter: MessageStatus | None = None,
+    status_filters: list[MessageStatus] | None = None,
 ) -> tuple[list[Message], int]:
     query = select(Message).join(PushKey, PushKey.id == Message.push_key_id)
     count_query = (
@@ -198,9 +199,9 @@ async def get_message_list(
                 PushKey.business_name.ilike(pattern),
             )
         )
-    if status_filter is not None:
-        query = query.where(Message.status == status_filter)
-        count_query = count_query.where(Message.status == status_filter)
+    if status_filters:
+        query = query.where(Message.status.in_(status_filters))
+        count_query = count_query.where(Message.status.in_(status_filters))
 
     query = (
         query.options(*message_load_options())
@@ -224,7 +225,7 @@ async def list_messages_for_export(
     session: AsyncSession,
     user: User,
     q: str | None = None,
-    status_filter: MessageStatus | None = None,
+    status_filters: list[MessageStatus] | None = None,
 ) -> list[Message]:
     messages, _ = await get_message_list(
         session,
@@ -232,7 +233,7 @@ async def list_messages_for_export(
         offset=0,
         limit=10_000,
         q=q,
-        status_filter=status_filter,
+        status_filters=status_filters,
     )
     return messages
 
@@ -257,7 +258,7 @@ def _payload_fingerprint(payload: PushRequest) -> str:
 def _message_export_query(
     user: User,
     q: str | None = None,
-    status_filter: MessageStatus | None = None,
+    status_filters: list[MessageStatus] | None = None,
 ):
     query = (
         select(
@@ -304,8 +305,8 @@ def _message_export_query(
                 PushKey.business_name.ilike(pattern),
             )
         )
-    if status_filter is not None:
-        query = query.where(Message.status == status_filter)
+    if status_filters:
+        query = query.where(Message.status.in_(status_filters))
     return query
 
 
@@ -313,7 +314,7 @@ async def stream_messages_csv(
     session: AsyncSession,
     user: User,
     q: str | None = None,
-    status_filter: MessageStatus | None = None,
+    status_filters: list[MessageStatus] | None = None,
 ):
     yield _csv_line(
         [
@@ -329,7 +330,7 @@ async def stream_messages_csv(
         ]
     )
 
-    result = await session.stream(_message_export_query(user, q=q, status_filter=status_filter))
+    result = await session.stream(_message_export_query(user, q=q, status_filters=status_filters))
     async for row in result:
         yield _csv_line(
             [
@@ -417,7 +418,6 @@ async def load_delivery(session: AsyncSession, delivery_id: str) -> Delivery | N
             .selectinload(Message.push_key)
             .selectinload(PushKey.channel_links)
             .selectinload(PushKeyChannel.channel)
-            .selectinload(Channel.user_permissions),
         )
     )
 

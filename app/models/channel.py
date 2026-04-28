@@ -16,20 +16,6 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 
-class UserChannelPermission(TimestampMixin, Base):
-    __tablename__ = "user_channel_permissions"
-
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    channel_id: Mapped[str] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True
-    )
-
-    user: Mapped[User] = relationship(back_populates="channel_permissions")
-    channel: Mapped[Channel] = relationship(back_populates="user_permissions")
-
-
 class Channel(TimestampMixin, Base):
     __tablename__ = "channels"
 
@@ -46,10 +32,6 @@ class Channel(TimestampMixin, Base):
     )
 
     created_by: Mapped[User | None] = relationship(back_populates="created_channels")
-    user_permissions: Mapped[list[UserChannelPermission]] = relationship(
-        back_populates="channel",
-        cascade="all, delete-orphan",
-    )
     group_permissions: Mapped[list[UserGroupChannelPermission]] = relationship(
         back_populates="channel",
         cascade="all, delete-orphan",

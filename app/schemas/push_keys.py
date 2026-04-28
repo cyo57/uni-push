@@ -41,3 +41,7 @@ class PushKeyWithSecret(PushKeyOut):
 class PushKeyListOut(BaseModel):
     items: list[PushKeyOut]
     total: int
+
+
+class PushKeyDeleteResult(BaseModel):
+    id: str

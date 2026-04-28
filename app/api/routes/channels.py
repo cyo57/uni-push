@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +17,6 @@ from app.services.channels import (
     create_channel,
     get_channel_by_id,
     list_channels_for_user,
-    set_channel_permission,
     soft_delete_channel,
     update_channel,
 )
@@ -137,55 +135,3 @@ async def post_channel_test(
         "response_body": result.response_body,
         "error": result.error,
     }
-
-
-@router.post("/{channel_id}/permissions/{user_id}", response_model=ChannelOut)
-async def grant_channel_permission(
-    channel_id: str,
-    user_id: str,
-    current_user: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-) -> ChannelOut:
-    channel = await get_channel_by_id(session, channel_id)
-    user = await session.scalar(select(User).where(User.id == user_id))
-    if channel is None or user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Channel or user not found"
-        )
-    updated = await set_channel_permission(session, channel, user_id, granted=True)
-    await record_audit_log(
-        session,
-        actor=current_user,
-        action="channel.permission.grant",
-        target_type="channel",
-        target_id=updated.id,
-        detail={"user_id": user_id},
-    )
-    await session.commit()
-    return channel_to_out(updated, include_secrets=True)
-
-
-@router.delete("/{channel_id}/permissions/{user_id}", response_model=ChannelOut)
-async def revoke_channel_permission(
-    channel_id: str,
-    user_id: str,
-    current_user: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-) -> ChannelOut:
-    channel = await get_channel_by_id(session, channel_id)
-    user = await session.scalar(select(User).where(User.id == user_id))
-    if channel is None or user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Channel or user not found"
-        )
-    updated = await set_channel_permission(session, channel, user_id, granted=False)
-    await record_audit_log(
-        session,
-        actor=current_user,
-        action="channel.permission.revoke",
-        target_type="channel",
-        target_id=updated.id,
-        detail={"user_id": user_id},
-    )
-    await session.commit()
-    return channel_to_out(updated, include_secrets=True)

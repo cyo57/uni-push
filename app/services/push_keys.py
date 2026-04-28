@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.enums import UserRole
 from app.core.security import generate_push_key, hash_push_key, key_hint
 from app.models.channel import Channel
+from app.models.message import Delivery, Message
 from app.models.push_key import PushKey, PushKeyChannel
 from app.models.user import User
 from app.schemas.push_keys import PushKeyCreate, PushKeyUpdate
@@ -18,9 +19,6 @@ from app.services.channels import list_authorized_channel_ids
 
 def push_key_load_options():
     return (
-        selectinload(PushKey.channel_links)
-        .selectinload(PushKeyChannel.channel)
-        .selectinload(Channel.user_permissions),
         selectinload(PushKey.channel_links)
         .selectinload(PushKeyChannel.channel)
         .selectinload(Channel.group_permissions),
@@ -168,6 +166,18 @@ async def rotate_push_key(
     await session.commit()
     refreshed = await get_push_key_for_user(session, push_key.id, actor)
     return refreshed, plaintext_key  # type: ignore[return-value]
+
+
+async def delete_push_key(session: AsyncSession, push_key: PushKey) -> None:
+    message_ids = list(
+        await session.scalars(select(Message.id).where(Message.push_key_id == push_key.id))
+    )
+    if message_ids:
+        await session.execute(delete(Delivery).where(Delivery.message_id.in_(message_ids)))
+        await session.execute(delete(Message).where(Message.id.in_(message_ids)))
+
+    await session.delete(push_key)
+    await session.commit()
 
 
 async def resolve_push_key_by_token(session: AsyncSession, token: str) -> PushKey | None:

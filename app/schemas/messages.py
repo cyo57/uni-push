@@ -51,12 +51,15 @@ class DeliveryOut(BaseModel):
 
 class MessageListItem(BaseModel):
     id: str
+    user_id: str
+    user_display_name: str
     push_key_id: str
     push_key_business_name: str
     title: str
     message_type: MessageType
     status: MessageStatus
     created_at: datetime
+    channel_names: list[str]
     delivery_count: int
     success_count: int
     failed_count: int
@@ -69,6 +72,8 @@ class MessageListOut(BaseModel):
 
 class MessageDetailOut(BaseModel):
     id: str
+    user_id: str
+    user_display_name: str
     push_key_id: str
     push_key_business_name: str
     source: str

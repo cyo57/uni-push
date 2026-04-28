@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom"
 import {
   getPushKeys,
   createPushKey,
+  deletePushKey,
   updatePushKey,
   rotatePushKey,
   getChannels,
@@ -50,6 +51,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { toast } from "sonner"
 import {
   Plus,
@@ -58,6 +60,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Radio,
+  Trash2,
 } from "lucide-react"
 
 const PAGE_SIZE = 10
@@ -69,6 +73,7 @@ export function PushKeysPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingKey, setEditingKey] = useState<PushKeyOut | null>(null)
   const [rotateId, setRotateId] = useState<string | null>(null)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null)
   const [selectedChannels, setSelectedChannels] = useState<string[]>([])
   const [defaultChannel, setDefaultChannel] = useState<string>("")
@@ -113,6 +118,15 @@ export function PushKeysPage() {
       queryClient.invalidateQueries({ queryKey: ["push-keys"] })
       setRotateId(null)
       setNewKeyValue(data.plaintext_key)
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deletePushKey,
+    onSuccess: () => {
+      toast.success("推送密钥已删除")
+      queryClient.invalidateQueries({ queryKey: ["push-keys"] })
+      setDeleteId(null)
     },
   })
 
@@ -202,6 +216,7 @@ export function PushKeysPage() {
         </Button>
       </div>
 
+      <TooltipProvider>
       <div className="rounded-lg border border-border/60 overflow-hidden">
         <Table>
           <TableHeader>
@@ -277,23 +292,19 @@ export function PushKeysPage() {
                       )}
                     </TableCell>
                     <TableCell className="py-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline" className="text-[10px] font-normal">
-                          {key.channels.length} 条
-                        </Badge>
-                        {key.channels.slice(0, 2).map((channel) => (
-                          <Link key={channel.id} to={`/channels?highlight=${channel.id}`}>
-                            <Badge variant="secondary" className="text-[10px] font-normal">
-                              {channel.name}
+                      {key.channels.length > 0 ? (
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <Badge variant="outline" className="gap-1 text-[10px] font-normal">
+                              <Radio className="h-3 w-3" />
+                              {key.channels.length} 条
                             </Badge>
-                          </Link>
-                        ))}
-                        {key.channels.length > 2 ? (
-                          <Badge variant="secondary" className="text-[10px] font-normal">
-                            +{key.channels.length - 2}
-                          </Badge>
-                        ) : null}
-                      </div>
+                          </TooltipTrigger>
+                          <TooltipContent>{key.channels.map((channel) => channel.name).join("、")}</TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell className="py-3 text-sm text-muted-foreground">
                       {formatDate(key.created_at)}
@@ -318,6 +329,15 @@ export function PushKeysPage() {
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => setDeleteId(key.id)}
+                          title="删除密钥"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -327,6 +347,7 @@ export function PushKeysPage() {
           </TableBody>
         </Table>
       </div>
+      </TooltipProvider>
 
       {totalPages > 1 && (
         <div className="flex items-center justify-end gap-2">
@@ -495,6 +516,26 @@ export function PushKeysPage() {
               className="h-8 text-xs"
             >
               立即轮换
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
+        <AlertDialogContent className="border-border/60">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base">确认删除推送密钥？</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs">
+              删除后业务侧将无法继续使用该密钥发起推送，请确认没有仍在使用中的调用方。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="h-8 text-xs">取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+              className="h-8 text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              删除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

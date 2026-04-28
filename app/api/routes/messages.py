@@ -20,22 +20,43 @@ from app.services.serializers import message_to_detail, message_to_list_item
 router = APIRouter(prefix="/messages", tags=["messages"])
 
 
+def _parse_status_filters(raw_statuses: str | None) -> list[MessageStatus] | None:
+    if not raw_statuses:
+        return None
+
+    items: list[MessageStatus] = []
+    for raw_item in raw_statuses.split(","):
+        value = raw_item.strip()
+        if not value:
+            continue
+        try:
+            items.append(MessageStatus(value))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid status filter: {value}",
+            ) from exc
+
+    return list(dict.fromkeys(items)) or None
+
+
 @router.get("", response_model=MessageListOut)
 async def get_messages(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     q: str | None = Query(default=None, min_length=1, max_length=128),
-    status_filter: MessageStatus | None = Query(default=None, alias="status"),
+    status_filter: str | None = Query(default=None, alias="status"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> MessageListOut:
+    status_filters = _parse_status_filters(status_filter)
     items, total = await get_message_list(
         session,
         current_user,
         offset,
         limit,
         q=q,
-        status_filter=status_filter,
+        status_filters=status_filters,
     )
     return MessageListOut(items=[message_to_list_item(item) for item in items], total=total)
 
@@ -43,12 +64,13 @@ async def get_messages(
 @router.get("/export")
 async def export_messages(
     q: str | None = Query(default=None, min_length=1, max_length=128),
-    status_filter: MessageStatus | None = Query(default=None, alias="status"),
+    status_filter: str | None = Query(default=None, alias="status"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
+    status_filters = _parse_status_filters(status_filter)
     return StreamingResponse(
-        stream_messages_csv(session, current_user, q=q, status_filter=status_filter),
+        stream_messages_csv(session, current_user, q=q, status_filters=status_filters),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="messages.csv"'},
     )

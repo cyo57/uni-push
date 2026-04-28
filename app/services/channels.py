@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.crypto import encrypt_secret
-from app.models.channel import Channel, UserChannelPermission
+from app.models.channel import Channel
 from app.models.group import UserGroupChannelPermission, UserGroupMember
 from app.models.user import User
 from app.schemas.channels import ChannelCreate, ChannelUpdate
@@ -13,7 +13,6 @@ from app.schemas.channels import ChannelCreate, ChannelUpdate
 
 def channel_load_options():
     return (
-        selectinload(Channel.user_permissions),
         selectinload(Channel.group_permissions),
         selectinload(Channel.created_by),
     )
@@ -92,30 +91,10 @@ async def soft_delete_channel(session: AsyncSession, channel: Channel) -> None:
     await session.commit()
 
 
-async def set_channel_permission(
-    session: AsyncSession,
-    channel: Channel,
-    user_id: str,
-    granted: bool,
-) -> Channel:
-    permission = await session.get(
-        UserChannelPermission, {"user_id": user_id, "channel_id": channel.id}
-    )
-    if granted and permission is None:
-        session.add(UserChannelPermission(user_id=user_id, channel_id=channel.id))
-    if not granted and permission is not None:
-        await session.delete(permission)
-    await session.commit()
-    return await get_channel_by_id(session, channel.id)  # type: ignore[return-value]
-
-
 async def list_authorized_channel_ids(session: AsyncSession, user_id: str) -> set[str]:
-    direct_rows = await session.scalars(
-        select(UserChannelPermission.channel_id).where(UserChannelPermission.user_id == user_id)
-    )
     group_rows = await session.scalars(
         select(UserGroupChannelPermission.channel_id)
         .join(UserGroupMember, UserGroupMember.group_id == UserGroupChannelPermission.group_id)
         .where(UserGroupMember.user_id == user_id)
     )
-    return {*(set(direct_rows)), *(set(group_rows))}
+    return set(group_rows)

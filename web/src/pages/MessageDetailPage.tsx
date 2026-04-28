@@ -131,7 +131,11 @@ export function MessageDetailPage() {
             <p className="text-sm font-medium mt-0.5">{data.title}</p>
           </div>
           <div>
-            <span className="text-xs text-muted-foreground">业务</span>
+            <span className="text-xs text-muted-foreground">使用人</span>
+            <p className="text-sm font-medium mt-0.5">{data.user_display_name}</p>
+          </div>
+          <div>
+            <span className="text-xs text-muted-foreground">密钥名称</span>
             <p className="text-sm font-medium mt-0.5">{data.push_key_business_name}</p>
           </div>
           <div>

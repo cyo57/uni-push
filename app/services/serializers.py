@@ -55,7 +55,6 @@ def channel_to_out(channel: Channel, include_secrets: bool = False) -> ChannelOu
         is_deleted=channel.is_deleted,
         per_minute_limit=channel.per_minute_limit,
         created_by_id=channel.created_by_id,
-        authorized_user_ids=[permission.user_id for permission in channel.user_permissions],
         authorized_group_ids=[permission.group_id for permission in channel.group_permissions],
         created_at=channel.created_at,
         updated_at=channel.updated_at,
@@ -143,14 +142,18 @@ def message_to_list_item(message: Message) -> MessageListItem:
         for delivery in message.deliveries
         if delivery.status in {DeliveryStatus.FAILED, DeliveryStatus.DEAD_LETTER}
     )
+    channel_names = list(dict.fromkeys(delivery.channel.name for delivery in message.deliveries))
     return MessageListItem(
         id=message.id,
+        user_id=message.user_id,
+        user_display_name=message.user.display_name,
         push_key_id=message.push_key_id,
         push_key_business_name=message.push_key.business_name,
         title=message.title,
         message_type=message.message_type,
         status=message.status,
         created_at=message.created_at,
+        channel_names=channel_names,
         delivery_count=len(message.deliveries),
         success_count=success_count,
         failed_count=failed_count,
@@ -160,6 +163,8 @@ def message_to_list_item(message: Message) -> MessageListItem:
 def message_to_detail(message: Message) -> MessageDetailOut:
     return MessageDetailOut(
         id=message.id,
+        user_id=message.user_id,
+        user_display_name=message.user.display_name,
         push_key_id=message.push_key_id,
         push_key_business_name=message.push_key.business_name,
         source=message.source.value,

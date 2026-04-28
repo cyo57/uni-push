@@ -6,6 +6,7 @@ from app.db.session import get_session
 from app.models.user import User
 from app.schemas.push_keys import (
     PushKeyCreate,
+    PushKeyDeleteResult,
     PushKeyListOut,
     PushKeyOut,
     PushKeyUpdate,
@@ -14,6 +15,7 @@ from app.schemas.push_keys import (
 from app.services.audit import record_audit_log
 from app.services.push_keys import (
     create_push_key,
+    delete_push_key,
     get_push_key_for_user,
     list_push_keys_for_user,
     rotate_push_key,
@@ -89,6 +91,30 @@ async def patch_push_key(
     )
     await session.commit()
     return push_key_to_out(updated, include_channel_secrets=current_user.role.value == "admin")
+
+
+@router.delete("/{push_key_id}", response_model=PushKeyDeleteResult)
+async def delete_push_key_route(
+    push_key_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PushKeyDeleteResult:
+    push_key = await get_push_key_for_user(session, push_key_id, current_user)
+    if push_key is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Push key not found")
+    deleted_id = push_key.id
+    business_name = push_key.business_name
+    await delete_push_key(session, push_key)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="push_key.delete",
+        target_type="push_key",
+        target_id=deleted_id,
+        detail={"business_name": business_name},
+    )
+    await session.commit()
+    return PushKeyDeleteResult(id=deleted_id)
 
 
 @router.post("/{push_key_id}/rotate", response_model=PushKeyWithSecret)

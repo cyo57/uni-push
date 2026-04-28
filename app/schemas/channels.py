@@ -40,7 +40,6 @@ class ChannelOut(BaseModel):
     is_deleted: bool
     per_minute_limit: int
     created_by_id: str | None
-    authorized_user_ids: list[str] = Field(default_factory=list)
     authorized_group_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -50,11 +49,6 @@ class ChannelTestRequest(BaseModel):
     title: str = "UniPush channel test"
     content: str = "This is a test message from UniPush."
     type: MessageType = MessageType.TEXT
-
-
-class ChannelPermissionUpdate(BaseModel):
-    user_id: str
-
 
 class ChannelListOut(BaseModel):
     items: list[ChannelOut]

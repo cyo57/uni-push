@@ -11,7 +11,7 @@ from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.audit import AuditLog
-    from app.models.channel import Channel, UserChannelPermission
+    from app.models.channel import Channel
     from app.models.group import UserGroupMember
     from app.models.message import Message
     from app.models.push_key import PushKey
@@ -31,10 +31,6 @@ class User(TimestampMixin, Base):
     created_channels: Mapped[list[Channel]] = relationship(back_populates="created_by")
     push_keys: Mapped[list[PushKey]] = relationship(back_populates="user")
     messages: Mapped[list[Message]] = relationship(back_populates="user")
-    channel_permissions: Mapped[list[UserChannelPermission]] = relationship(
-        back_populates="user",
-        cascade="all, delete-orphan",
-    )
     group_memberships: Mapped[list[UserGroupMember]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",

@@ -109,8 +109,8 @@
   }
 
   ::selection {
-    background-color: oklch(0.922 0 0 / 18%);
-    color: oklch(0.985 0 0);
+    background-color: oklch(0.78 0.03 286 / 45%);
+    color: var(--foreground);
   }
 
   ::-webkit-scrollbar {
