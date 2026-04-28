@@ -13,6 +13,7 @@ from app.schemas.channels import (
     ChannelTestRequest,
     ChannelUpdate,
 )
+from app.services.audit import record_audit_log
 from app.services.channels import (
     create_channel,
     get_channel_by_id,
@@ -55,6 +56,15 @@ async def post_channel(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Channel name already exists"
         ) from exc
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="channel.create",
+        target_type="channel",
+        target_id=channel.id,
+        detail={"name": channel.name, "type": channel.type.value},
+    )
+    await session.commit()
     return channel_to_out(channel, include_secrets=True)
 
 
@@ -62,7 +72,7 @@ async def post_channel(
 async def patch_channel(
     channel_id: str,
     payload: ChannelUpdate,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ChannelOut:
     channel = await get_channel_by_id(session, channel_id)
@@ -75,19 +85,37 @@ async def patch_channel(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Channel name already exists"
         ) from exc
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="channel.update",
+        target_type="channel",
+        target_id=updated.id,
+        detail=payload.model_dump(exclude_none=True),
+    )
+    await session.commit()
     return channel_to_out(updated, include_secrets=True)
 
 
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_channel(
     channel_id: str,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     channel = await get_channel_by_id(session, channel_id)
     if channel is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
     await soft_delete_channel(session, channel)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="channel.delete",
+        target_type="channel",
+        target_id=channel.id,
+        detail={"name": channel.name},
+    )
+    await session.commit()
 
 
 @router.post("/{channel_id}/test")
@@ -115,7 +143,7 @@ async def post_channel_test(
 async def grant_channel_permission(
     channel_id: str,
     user_id: str,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ChannelOut:
     channel = await get_channel_by_id(session, channel_id)
@@ -125,6 +153,15 @@ async def grant_channel_permission(
             status_code=status.HTTP_404_NOT_FOUND, detail="Channel or user not found"
         )
     updated = await set_channel_permission(session, channel, user_id, granted=True)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="channel.permission.grant",
+        target_type="channel",
+        target_id=updated.id,
+        detail={"user_id": user_id},
+    )
+    await session.commit()
     return channel_to_out(updated, include_secrets=True)
 
 
@@ -132,7 +169,7 @@ async def grant_channel_permission(
 async def revoke_channel_permission(
     channel_id: str,
     user_id: str,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ChannelOut:
     channel = await get_channel_by_id(session, channel_id)
@@ -142,4 +179,13 @@ async def revoke_channel_permission(
             status_code=status.HTTP_404_NOT_FOUND, detail="Channel or user not found"
         )
     updated = await set_channel_permission(session, channel, user_id, granted=False)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="channel.permission.revoke",
+        target_type="channel",
+        target_id=updated.id,
+        detail={"user_id": user_id},
+    )
+    await session.commit()
     return channel_to_out(updated, include_secrets=True)

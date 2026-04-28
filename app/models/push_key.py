@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -43,6 +43,7 @@ class PushKey(TimestampMixin, Base):
     per_minute_limit: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     default_channel_id: Mapped[str] = mapped_column(ForeignKey("channels.id"), index=True)
     last_rotated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False,
     )

@@ -1,3 +1,4 @@
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.enums import ChannelType, MessageType, UserRole
 from app.core.security import (
     create_access_token,
@@ -15,10 +16,18 @@ from app.services.push_keys import create_push_key, resolve_push_key_by_token, r
 async def test_password_hash_and_jwt_roundtrip() -> None:
     password_hash = hash_password("secret-pass")
     assert verify_password("secret-pass", password_hash)
-    token = create_access_token("user-1", UserRole.ADMIN.value)
+    token = create_access_token("user-1", UserRole.ADMIN.value, 3)
     payload = decode_access_token(token)
     assert payload["sub"] == "user-1"
     assert payload["role"] == UserRole.ADMIN.value
+    assert payload["tv"] == 3
+
+
+async def test_secret_encryption_roundtrip() -> None:
+    encrypted = encrypt_secret("ding-secret")
+    assert encrypted is not None
+    assert encrypted != "ding-secret"
+    assert decrypt_secret(encrypted) == "ding-secret"
 
 
 async def test_adapter_payloads() -> None:
@@ -34,10 +43,26 @@ async def test_adapter_payloads() -> None:
         "CPU high",
         MessageType.TEXT,
     )
+    feishu_markdown = build_adapter_payload(
+        ChannelType.FEISHU_BOT,
+        "Alert",
+        "CPU high",
+        MessageType.MARKDOWN,
+    )
+    generic_payload = build_adapter_payload(
+        ChannelType.GENERIC_WEBHOOK,
+        "Alert",
+        "CPU high",
+        MessageType.TEXT,
+    )
     assert wecom_markdown["msgtype"] == "markdown"
     assert "## Alert" in wecom_markdown["markdown"]["content"]
     assert dingtalk_text["msgtype"] == "text"
     assert "Alert" in dingtalk_text["text"]["content"]
+    assert feishu_markdown["msg_type"] == "post"
+    assert feishu_markdown["content"]["post"]["zh_cn"]["title"] == "Alert"
+    assert generic_payload["type"] == MessageType.TEXT.value
+    assert generic_payload["content"] == "CPU high"
 
 
 async def test_push_key_rotation_invalidates_old_token(session_factory) -> None:

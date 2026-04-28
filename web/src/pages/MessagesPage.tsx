@@ -1,7 +1,8 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { getMessages } from "@/lib/api"
+import { exportMessages, getMessages } from "@/lib/api"
+import type { MessageStatus } from "@/lib/api"
 import { formatDateTime } from "@/lib/format"
 import {
   Table,
@@ -14,9 +15,19 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { ChevronLeft, ChevronRight, Download } from "lucide-react"
+import { toast } from "sonner"
 
 const PAGE_SIZE = 20
+type MessageFilterValue = MessageStatus | "all"
 
 const statusVariants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary",
@@ -50,11 +61,32 @@ const statusLabels: Record<string, string> = {
 export function MessagesPage() {
   const navigate = useNavigate()
   const [page, setPage] = useState(0)
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState<MessageFilterValue>("all")
+  const effectiveStatus = statusFilter === "all" ? undefined : statusFilter
 
   const { data, isLoading } = useQuery({
-    queryKey: ["messages", page],
-    queryFn: () => getMessages(page * PAGE_SIZE, PAGE_SIZE),
+    queryKey: ["messages", page, search, statusFilter],
+    queryFn: () =>
+      getMessages(page * PAGE_SIZE, PAGE_SIZE, {
+        q: search || undefined,
+        status: effectiveStatus,
+      }),
   })
+
+  async function handleExport() {
+    const blob = await exportMessages({
+      q: search || undefined,
+      status: effectiveStatus,
+    })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = "messages.csv"
+    link.click()
+    window.URL.revokeObjectURL(url)
+    toast.success("消息记录已导出")
+  }
 
   const items = data?.items ?? []
   const total = data?.total ?? 0
@@ -65,6 +97,41 @@ export function MessagesPage() {
       <div>
         <h1 className="text-lg font-semibold tracking-tight">消息记录</h1>
         <p className="text-sm text-muted-foreground mt-0.5">查看每条推送消息的投递结果</p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card p-3 md:flex-row md:items-center">
+        <Input
+          value={search}
+          onChange={(e) => {
+            setPage(0)
+            setSearch(e.target.value)
+          }}
+          placeholder="搜索消息 ID、业务名称、标题"
+          className="h-8 text-sm"
+        />
+        <Select
+          value={statusFilter}
+          onValueChange={(value) => {
+            setPage(0)
+            setStatusFilter((value ?? "all") as MessageFilterValue)
+          }}
+        >
+          <SelectTrigger className="h-8 w-full text-sm md:w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="queued">排队中</SelectItem>
+            <SelectItem value="processing">处理中</SelectItem>
+            <SelectItem value="success">成功</SelectItem>
+            <SelectItem value="partial_success">部分成功</SelectItem>
+            <SelectItem value="failed">失败</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleExport}>
+          <Download className="mr-1.5 h-3.5 w-3.5" />
+          导出 CSV
+        </Button>
       </div>
 
       <div className="rounded-lg border border-border/60 overflow-hidden">

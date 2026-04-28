@@ -17,7 +17,7 @@ from app.models.channel import Channel
 from app.models.message import Delivery, Message
 from app.models.push_key import PushKey, PushKeyChannel
 from app.models.user import User
-from app.services.messages import process_delivery
+from app.services.messages import process_delivery, repair_stale_deliveries
 from app.services.rate_limit import allow_rate_limit
 
 
@@ -111,3 +111,38 @@ async def test_worker_delays_when_channel_rate_limited(session_factory, fake_red
         assert delivery.status == DeliveryStatus.RETRYING
         assert delivery.attempt_count == 0
         assert fake_redis.jobs[-1]["kwargs"]["_defer_by"].total_seconds() >= 1
+
+
+async def test_worker_dead_letters_non_retryable_failures(session_factory, fake_redis) -> None:
+    delivery_id, _ = await seed_delivery(session_factory)
+    transport = httpx.MockTransport(lambda request: httpx.Response(400, json={"errcode": 400}))
+    async with httpx.AsyncClient(transport=transport) as client:
+        async with session_factory() as session:
+            await process_delivery(session, fake_redis, client, delivery_id)
+
+    async with session_factory() as session:
+        delivery = await session.scalar(select(Delivery).where(Delivery.id == delivery_id))
+        assert delivery is not None
+        assert delivery.status == DeliveryStatus.DEAD_LETTER
+        assert delivery.dead_lettered_at is not None
+
+
+async def test_repair_stale_deliveries_requeues_stuck_sending(session_factory, fake_redis) -> None:
+    delivery_id, _ = await seed_delivery(session_factory)
+    async with session_factory() as session:
+        delivery = await session.scalar(select(Delivery).where(Delivery.id == delivery_id))
+        assert delivery is not None
+        delivery.status = DeliveryStatus.SENDING
+        delivery.processing_started_at = datetime.now(UTC).replace(year=2020)
+        await session.commit()
+
+    async with session_factory() as session:
+        repaired = await repair_stale_deliveries(session, fake_redis)
+        assert repaired == 1
+
+    async with session_factory() as session:
+        delivery = await session.scalar(select(Delivery).where(Delivery.id == delivery_id))
+        assert delivery is not None
+        assert delivery.status == DeliveryStatus.QUEUED
+        assert delivery.processing_started_at is None
+        assert any(job["args"][0] == delivery_id for job in fake_redis.jobs)

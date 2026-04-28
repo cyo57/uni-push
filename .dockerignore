@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+unipush.db
+web/node_modules
+web/dist
+.env
+.codex
+docs

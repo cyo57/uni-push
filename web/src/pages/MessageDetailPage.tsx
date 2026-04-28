@@ -1,11 +1,12 @@
 import { useParams, useNavigate } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
-import { getMessage } from "@/lib/api"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { getMessage, replayMessage, retryDelivery } from "@/lib/api"
 import { formatDateTime } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Table,
   TableBody,
@@ -14,7 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { ArrowLeft } from "lucide-react"
+import { ArrowLeft, RotateCcw } from "lucide-react"
+import { toast } from "sonner"
 
 const statusVariants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pending: "secondary",
@@ -23,6 +25,7 @@ const statusVariants: Record<string, "default" | "secondary" | "destructive" | "
   success: "default",
   failed: "destructive",
   retrying: "outline",
+  dead_letter: "destructive",
 }
 
 const statusClasses: Record<string, string> = {
@@ -32,6 +35,7 @@ const statusClasses: Record<string, string> = {
   success: "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15",
   failed: "bg-red-500/10 text-red-400 hover:bg-red-500/15",
   retrying: "bg-orange-500/10 text-orange-400 hover:bg-orange-500/15",
+  dead_letter: "bg-red-500/15 text-red-300 hover:bg-red-500/20",
 }
 
 const statusLabels: Record<string, string> = {
@@ -41,6 +45,7 @@ const statusLabels: Record<string, string> = {
   success: "成功",
   failed: "失败",
   retrying: "重试中",
+  dead_letter: "死信",
 }
 
 const messageTypeLabels: Record<string, string> = {
@@ -51,11 +56,29 @@ const messageTypeLabels: Record<string, string> = {
 export function MessageDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
     queryKey: ["message", id],
     queryFn: () => getMessage(id!),
     enabled: !!id,
+  })
+
+  const replayMutation = useMutation({
+    mutationFn: replayMessage,
+    onSuccess: (result) => {
+      toast.success(`已重放消息：${result.message_id}`)
+    },
+  })
+
+  const retryMutation = useMutation({
+    mutationFn: ({ messageId, deliveryId }: { messageId: string; deliveryId: string }) =>
+      retryDelivery(messageId, deliveryId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["message", id] })
+      await queryClient.invalidateQueries({ queryKey: ["messages"] })
+      toast.success("失败投递已重新入队")
+    },
   })
 
   if (isLoading) {
@@ -86,6 +109,16 @@ export function MessageDetailPage() {
           <h1 className="text-lg font-semibold tracking-tight">消息详情</h1>
           <p className="text-[10px] text-muted-foreground font-mono">{data.id}</p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto h-8 text-xs"
+          onClick={() => replayMutation.mutate(data.id)}
+          disabled={replayMutation.isPending}
+        >
+          <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+          {replayMutation.isPending ? "重放中..." : "重放消息"}
+        </Button>
       </div>
 
       <Card className="border-border/60 shadow-none">
@@ -153,14 +186,16 @@ export function MessageDetailPage() {
                   <TableHead className="text-xs font-medium text-muted-foreground h-9">通道</TableHead>
                   <TableHead className="text-xs font-medium text-muted-foreground h-9">状态</TableHead>
                   <TableHead className="text-xs font-medium text-muted-foreground h-9">尝试次数</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground h-9">下次重试</TableHead>
                   <TableHead className="text-xs font-medium text-muted-foreground h-9">送达时间</TableHead>
                   <TableHead className="text-xs font-medium text-muted-foreground h-9">错误信息</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground h-9 text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.deliveries.length === 0 ? (
                   <TableRow className="border-border/40">
-                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                       暂无投递记录
                     </TableCell>
                   </TableRow>
@@ -183,11 +218,34 @@ export function MessageDetailPage() {
                       </TableCell>
                       <TableCell className="py-3 text-sm text-muted-foreground">{delivery.attempt_count}</TableCell>
                       <TableCell className="py-3 text-sm text-muted-foreground">
+                        {formatDateTime(delivery.next_retry_at)}
+                      </TableCell>
+                      <TableCell className="py-3 text-sm text-muted-foreground">
                         {formatDateTime(delivery.delivered_at)}
                       </TableCell>
                       <TableCell className="py-3">
                         {delivery.final_error ? (
                           <span className="text-xs text-red-400">{delivery.final_error}</span>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-3 text-right">
+                        {delivery.status === "failed" || delivery.status === "dead_letter" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() =>
+                              retryMutation.mutate({
+                                messageId: data.id,
+                                deliveryId: delivery.id,
+                              })
+                            }
+                            disabled={retryMutation.isPending}
+                          >
+                            重试投递
+                          </Button>
                         ) : (
                           <span className="text-sm text-muted-foreground">-</span>
                         )}
@@ -200,14 +258,88 @@ export function MessageDetailPage() {
           </div>
 
           {data.deliveries.map((delivery) => (
-            delivery.last_response_body && (
-              <div key={`resp-${delivery.id}`}>
-                <span className="text-xs font-medium">{delivery.channel_name} 的响应内容</span>
-                <pre className="mt-1.5 max-h-60 overflow-auto rounded-md bg-muted p-3 text-[10px] text-muted-foreground">
-                  {delivery.last_response_body}
-                </pre>
+            <div key={delivery.id} className="rounded-lg border border-border/60 bg-muted/10 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{delivery.channel_name}</span>
+                    <Badge
+                      variant={statusVariants[delivery.status] ?? "outline"}
+                      className={`text-[10px] font-normal ${statusClasses[delivery.status] ?? ""}`}
+                    >
+                      {statusLabels[delivery.status] ?? delivery.status}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{delivery.channel_type}</p>
+                </div>
+                <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                  <span>开始处理：{formatDateTime(delivery.processing_started_at)}</span>
+                  <span>进入死信：{formatDateTime(delivery.dead_lettered_at)}</span>
+                  <span>HTTP 状态：{delivery.last_response_status ?? "-"}</span>
+                </div>
               </div>
-            )
+
+              <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-xs font-medium">适配器载荷</p>
+                  <ScrollArea className="h-48 rounded-md border border-border/60 bg-background p-3">
+                    <pre className="text-[10px] text-muted-foreground">
+                      {JSON.stringify(delivery.adapter_payload, null, 2)}
+                    </pre>
+                  </ScrollArea>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-medium">响应与错误</p>
+                  <ScrollArea className="h-48 rounded-md border border-border/60 bg-background p-3">
+                    <pre className="whitespace-pre-wrap break-all text-[10px] text-muted-foreground">
+                      {delivery.last_response_body || delivery.final_error || "暂无响应内容"}
+                    </pre>
+                  </ScrollArea>
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-medium">尝试日志</p>
+                {delivery.attempt_logs.length > 0 ? (
+                  <div className="rounded-lg border border-border/60 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border/60 hover:bg-transparent">
+                          <TableHead className="h-8 text-[11px] text-muted-foreground">时间</TableHead>
+                          <TableHead className="h-8 text-[11px] text-muted-foreground">状态码</TableHead>
+                          <TableHead className="h-8 text-[11px] text-muted-foreground">错误</TableHead>
+                          <TableHead className="h-8 text-[11px] text-muted-foreground">重试延迟</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {delivery.attempt_logs.map((log, index) => (
+                          <TableRow key={`${delivery.id}-${index}`} className="border-border/40">
+                            <TableCell className="py-2 text-xs text-muted-foreground">
+                              {formatDateTime(log.at)}
+                            </TableCell>
+                            <TableCell className="py-2 text-xs text-muted-foreground">
+                              {log.status_code ?? "-"}
+                            </TableCell>
+                            <TableCell className="py-2 text-xs text-muted-foreground">
+                              {log.error || "-"}
+                            </TableCell>
+                            <TableCell className="py-2 text-xs text-muted-foreground">
+                              {log.retry_scheduled_in_seconds
+                                ? `${log.retry_scheduled_in_seconds}s`
+                                : "-"}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground">
+                    暂无尝试日志
+                  </div>
+                )}
+              </div>
+            </div>
           ))}
         </CardContent>
       </Card>

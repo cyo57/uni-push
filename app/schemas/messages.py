@@ -14,6 +14,7 @@ class PushRequest(BaseModel):
 
 class PushResponseData(BaseModel):
     message_id: str
+    deduplicated: bool = False
 
 
 class PushResponse(BaseModel):
@@ -37,8 +38,10 @@ class DeliveryOut(BaseModel):
     channel_type: str
     status: DeliveryStatus
     attempt_count: int
+    processing_started_at: datetime | None
     next_retry_at: datetime | None
     delivered_at: datetime | None
+    dead_lettered_at: datetime | None
     final_error: str | None
     last_response_status: int | None
     last_response_body: str | None
@@ -77,3 +80,7 @@ class MessageDetailOut(BaseModel):
     request_payload: dict
     created_at: datetime
     deliveries: list[DeliveryOut]
+
+
+class MessageReplayResponse(BaseModel):
+    message_id: str

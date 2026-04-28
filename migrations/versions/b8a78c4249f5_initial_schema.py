@@ -6,17 +6,16 @@ Create Date: 2026-04-27 21:55:40.123149
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b8a78c4249f5"
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -54,7 +53,14 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column(
             "type",
-            sa.Enum("WECOM_BOT", "DINGTALK_BOT", name="channeltype", native_enum=False),
+            sa.Enum(
+                "WECOM_BOT",
+                "DINGTALK_BOT",
+                "FEISHU_BOT",
+                "GENERIC_WEBHOOK",
+                name="channeltype",
+                native_enum=False,
+            ),
             nullable=False,
         ),
         sa.Column("webhook_url", sa.Text(), nullable=False),

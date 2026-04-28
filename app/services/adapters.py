@@ -10,7 +10,9 @@ from urllib.parse import quote_plus
 
 import httpx
 
+from app.core.crypto import decrypt_secret
 from app.core.enums import ChannelType, MessageType
+from app.core.sanitization import sanitize_for_storage, sanitize_text
 from app.models.channel import Channel
 
 
@@ -34,18 +36,41 @@ def build_adapter_payload(
             return {"msgtype": "text", "text": {"content": f"{title}\n{content}"}}
         return {"msgtype": "markdown", "markdown": {"content": f"## {title}\n{content}"}}
 
-    if message_type == MessageType.TEXT:
-        return {"msgtype": "text", "text": {"content": f"{title}\n{content}"}}
-    return {"msgtype": "markdown", "markdown": {"title": title, "text": content}}
+    if channel_type == ChannelType.DINGTALK_BOT:
+        if message_type == MessageType.TEXT:
+            return {"msgtype": "text", "text": {"content": f"{title}\n{content}"}}
+        return {"msgtype": "markdown", "markdown": {"title": title, "text": content}}
+
+    if channel_type == ChannelType.FEISHU_BOT:
+        if message_type == MessageType.MARKDOWN:
+            return {
+                "msg_type": "post",
+                "content": {
+                    "post": {
+                        "zh_cn": {
+                            "title": title,
+                            "content": [[{"tag": "text", "text": content}]],
+                        }
+                    }
+                },
+            }
+        return {"msg_type": "text", "content": {"text": f"{title}\n{content}"}}
+
+    return {
+        "title": title,
+        "content": content,
+        "type": message_type.value,
+    }
 
 
 def build_channel_request(channel: Channel, payload: dict) -> tuple[str, dict, dict]:
     url = channel.webhook_url
     headers = {"Content-Type": "application/json"}
-    if channel.type == ChannelType.DINGTALK_BOT and channel.secret:
+    secret = decrypt_secret(channel.secret)
+    if channel.type == ChannelType.DINGTALK_BOT and secret:
         timestamp = str(int(time.time() * 1000))
-        secret_enc = channel.secret.encode("utf-8")
-        string_to_sign = f"{timestamp}\n{channel.secret}".encode()
+        secret_enc = secret.encode("utf-8")
+        string_to_sign = f"{timestamp}\n{secret}".encode()
         sign = quote_plus(
             base64.b64encode(hmac.new(secret_enc, string_to_sign, hashlib.sha256).digest()).decode(
                 "utf-8"
@@ -53,15 +78,22 @@ def build_channel_request(channel: Channel, payload: dict) -> tuple[str, dict, d
         )
         separator = "&" if "?" in url else "?"
         url = f"{url}{separator}timestamp={timestamp}&sign={sign}"
+    if channel.type == ChannelType.FEISHU_BOT and secret:
+        timestamp = str(int(time.time()))
+        string_to_sign = f"{timestamp}\n{secret}".encode()
+        sign = base64.b64encode(hmac.new(string_to_sign, digestmod=hashlib.sha256).digest()).decode(
+            "utf-8"
+        )
+        payload = {"timestamp": timestamp, "sign": sign, **payload}
     return url, headers, payload
 
 
 def _response_text(response: httpx.Response) -> str:
     try:
         data = response.json()
-        return json.dumps(data, ensure_ascii=False)
+        return json.dumps(sanitize_for_storage(data), ensure_ascii=False)
     except Exception:
-        return response.text
+        return sanitize_text(response.text) or ""
 
 
 def _parse_channel_success(channel_type: ChannelType, response: httpx.Response) -> tuple[bool, str]:
@@ -78,6 +110,10 @@ def _parse_channel_success(channel_type: ChannelType, response: httpx.Response) 
         return data.get("errcode") == 0, body
     if channel_type == ChannelType.DINGTALK_BOT:
         return data.get("errcode") == 0, body
+    if channel_type == ChannelType.FEISHU_BOT:
+        return (
+            data.get("StatusCode") == 0 or data.get("code") == 0 or data.get("errcode") == 0
+        ), body
     return True, body
 
 
@@ -86,7 +122,16 @@ async def send_via_channel(
     channel: Channel,
     payload: dict,
 ) -> AdapterSendResult:
-    url, headers, body = build_channel_request(channel, payload)
+    try:
+        url, headers, body = build_channel_request(channel, payload)
+    except Exception as exc:
+        return AdapterSendResult(
+            success=False,
+            retryable=False,
+            status_code=None,
+            response_body=None,
+            error=sanitize_text(str(exc)) or "Failed to prepare channel request",
+        )
     try:
         response = await client.post(url, headers=headers, json=body)
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -95,7 +140,7 @@ async def send_via_channel(
             retryable=True,
             status_code=None,
             response_body=None,
-            error=str(exc),
+            error=sanitize_text(str(exc)),
         )
 
     success, response_body = _parse_channel_success(channel.type, response)
@@ -105,5 +150,5 @@ async def send_via_channel(
         retryable=retryable,
         status_code=response.status_code,
         response_body=response_body,
-        error=None if success else "Channel rejected request",
+        error=None if success else sanitize_text("Channel rejected request"),
     )

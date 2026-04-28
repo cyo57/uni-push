@@ -27,6 +27,7 @@ class UserOut(BaseModel):
     display_name: str
     role: UserRole
     is_active: bool
+    group_ids: list[str] = Field(default_factory=list)
     created_at: datetime
 
 

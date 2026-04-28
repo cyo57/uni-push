@@ -23,12 +23,13 @@ def hash_password(password: str) -> str:
     return password_hasher.hash(password)
 
 
-def create_access_token(subject: str, role: str) -> str:
+def create_access_token(subject: str, role: str, token_version: int) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
     payload = {
         "sub": subject,
         "role": role,
+        "tv": token_version,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.jwt_expire_minutes)).timestamp()),
     }

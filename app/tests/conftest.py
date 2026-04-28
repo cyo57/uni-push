@@ -103,11 +103,11 @@ async def normal_user(session_factory: async_sessionmaker[AsyncSession]) -> User
 
 @pytest.fixture()
 def admin_headers(admin_user: User) -> dict[str, str]:
-    token = create_access_token(admin_user.id, admin_user.role.value)
+    token = create_access_token(admin_user.id, admin_user.role.value, admin_user.token_version)
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture()
 def user_headers(normal_user: User) -> dict[str, str]:
-    token = create_access_token(normal_user.id, normal_user.role.value)
+    token = create_access_token(normal_user.id, normal_user.role.value, normal_user.token_version)
     return {"Authorization": f"Bearer {token}"}

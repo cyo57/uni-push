@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { Link, useSearchParams } from "react-router-dom"
 import {
   getPushKeys,
   createPushKey,
@@ -63,6 +64,7 @@ const PAGE_SIZE = 10
 
 export function PushKeysPage() {
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingKey, setEditingKey] = useState<PushKeyOut | null>(null)
@@ -71,14 +73,15 @@ export function PushKeysPage() {
   const [selectedChannels, setSelectedChannels] = useState<string[]>([])
   const [defaultChannel, setDefaultChannel] = useState<string>("")
   const [keyActive, setKeyActive] = useState(true)
+  const highlightedId = searchParams.get("highlight")
 
   const { data, isLoading } = useQuery({
     queryKey: ["push-keys", page],
     queryFn: () => getPushKeys(page * PAGE_SIZE, PAGE_SIZE),
   })
 
-  const { data: channelsData } = useQuery({
-    queryKey: ["channels"],
+  const { data: channelsData, refetch: refetchChannels } = useQuery({
+    queryKey: ["channels", "push-key-choices"],
     queryFn: () => getChannels(0, 200),
   })
 
@@ -114,6 +117,7 @@ export function PushKeysPage() {
   })
 
   function openCreate() {
+    void refetchChannels()
     setEditingKey(null)
     setSelectedChannels([])
     setDefaultChannel("")
@@ -123,6 +127,7 @@ export function PushKeysPage() {
   }
 
   function openEdit(key: PushKeyOut) {
+    void refetchChannels()
     setEditingKey(key)
     setSelectedChannels(key.channels.map((c) => c.id))
     setDefaultChannel(key.default_channel_id)
@@ -137,12 +142,18 @@ export function PushKeysPage() {
     const fd = new FormData(form)
     const businessName = fd.get("business_name") as string
     const perMinuteLimit = parseInt(fd.get("per_minute_limit") as string) || 60
+    const bindableSelectedChannels = selectedChannels.filter((channelId) =>
+      allChannels.some((channel) => channel.id === channelId)
+    )
+    const effectiveDefaultChannel = bindableSelectedChannels.includes(defaultChannel)
+      ? defaultChannel
+      : (bindableSelectedChannels[0] ?? "")
 
-    if (!defaultChannel) {
+    if (!effectiveDefaultChannel) {
       toast.error("请选择默认通道")
       return
     }
-    if (selectedChannels.length === 0) {
+    if (bindableSelectedChannels.length === 0) {
       toast.error("请至少选择一个通道")
       return
     }
@@ -151,8 +162,8 @@ export function PushKeysPage() {
       const payload: PushKeyUpdate = {
         business_name: businessName,
         per_minute_limit: perMinuteLimit,
-        channel_ids: selectedChannels,
-        default_channel_id: defaultChannel,
+        channel_ids: bindableSelectedChannels,
+        default_channel_id: effectiveDefaultChannel,
         is_active: keyActive,
       }
       updateMutation.mutate({ id: editingKey.id, payload })
@@ -160,8 +171,8 @@ export function PushKeysPage() {
       const payload: PushKeyCreate = {
         business_name: businessName,
         per_minute_limit: perMinuteLimit,
-        channel_ids: selectedChannels,
-        default_channel_id: defaultChannel,
+        channel_ids: bindableSelectedChannels,
+        default_channel_id: effectiveDefaultChannel,
       }
       createMutation.mutate(payload)
     }
@@ -170,8 +181,11 @@ export function PushKeysPage() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const totalPages = Math.ceil(total / PAGE_SIZE)
-
   const allChannels = channelsData?.items ?? []
+  const selectableChannels = allChannels.filter((channel) => selectedChannels.includes(channel.id))
+  const effectiveDefaultChannel = selectableChannels.some((channel) => channel.id === defaultChannel)
+    ? defaultChannel
+    : (selectableChannels[0]?.id ?? "")
 
   return (
     <div className="space-y-5">
@@ -220,59 +234,95 @@ export function PushKeysPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((key) => (
-                <TableRow key={key.id} className="border-border/40">
-                  <TableCell className="py-3 text-sm font-medium">
-                    {key.business_name}
-                  </TableCell>
-                  <TableCell className="py-3">
-                    <code className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                      {key.key_hint}
-                    </code>
-                  </TableCell>
-                  <TableCell className="py-3">
-                    {key.is_active ? (
-                      <Badge variant="default" className="text-[10px] font-normal bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20">
-                        启用
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
-                        停用
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="py-3 text-sm text-muted-foreground">
-                    {key.channels.find((c) => c.id === key.default_channel_id)
-                      ?.name ?? key.default_channel_id}
-                  </TableCell>
-                  <TableCell className="py-3 text-sm text-muted-foreground">{key.channels.length}</TableCell>
-                  <TableCell className="py-3 text-sm text-muted-foreground">
-                    {formatDate(key.created_at)}
-                  </TableCell>
-                  <TableCell className="py-3 text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => setRotateId(key.id)}
-                        title="轮换密钥"
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => openEdit(key)}
-                        title="编辑密钥"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+              items.map((key) => {
+                const defaultChannelInfo = key.channels.find((channel) => channel.id === key.default_channel_id)
+
+                return (
+                  <TableRow
+                    key={key.id}
+                    className={
+                      highlightedId === key.id
+                        ? "border-l-2 border-l-primary bg-primary/5"
+                        : "border-border/40"
+                    }
+                  >
+                    <TableCell className="py-3 text-sm font-medium">
+                      {key.business_name}
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <code className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {key.key_hint}
+                      </code>
+                    </TableCell>
+                    <TableCell className="py-3">
+                      {key.is_active ? (
+                        <Badge variant="default" className="bg-emerald-500/15 text-[10px] font-normal text-emerald-400 hover:bg-emerald-500/20">
+                          启用
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
+                          停用
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-3 text-sm text-muted-foreground">
+                      {defaultChannelInfo ? (
+                        <Link to={`/channels?highlight=${defaultChannelInfo.id}`}>
+                          <Badge variant="secondary" className="text-[10px] font-normal">
+                            {defaultChannelInfo.name}
+                          </Badge>
+                        </Link>
+                      ) : (
+                        key.default_channel_id
+                      )}
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          {key.channels.length} 条
+                        </Badge>
+                        {key.channels.slice(0, 2).map((channel) => (
+                          <Link key={channel.id} to={`/channels?highlight=${channel.id}`}>
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              {channel.name}
+                            </Badge>
+                          </Link>
+                        ))}
+                        {key.channels.length > 2 ? (
+                          <Badge variant="secondary" className="text-[10px] font-normal">
+                            +{key.channels.length - 2}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-3 text-sm text-muted-foreground">
+                      {formatDate(key.created_at)}
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => setRotateId(key.id)}
+                          title="轮换密钥"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEdit(key)}
+                          title="编辑密钥"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>
@@ -348,6 +398,9 @@ export function PushKeysPage() {
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">可用通道</Label>
               <div className="space-y-2 rounded-md border border-border/60 p-3">
+                <p className="text-xs text-muted-foreground">
+                  这里只显示你当前有权限绑定的通道。
+                </p>
                 {allChannels.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     暂无可用通道
@@ -362,10 +415,10 @@ export function PushKeysPage() {
                         id={`ch-${channel.id}`}
                         checked={selectedChannels.includes(channel.id)}
                         onCheckedChange={(checked) => {
-                          setSelectedChannels((prev) =>
+                          setSelectedChannels((previous) =>
                             checked
-                              ? [...prev, channel.id]
-                              : prev.filter((id) => id !== channel.id)
+                              ? Array.from(new Set([...previous, channel.id]))
+                              : previous.filter((id) => id !== channel.id)
                           )
                         }}
                       />
@@ -383,14 +436,14 @@ export function PushKeysPage() {
             <div className="space-y-1.5">
               <Label htmlFor="default_channel" className="text-xs font-medium">默认通道</Label>
               <Select
-                value={defaultChannel}
+                value={effectiveDefaultChannel}
                 onValueChange={(v) => setDefaultChannel(v ?? "")}
               >
                 <SelectTrigger className="h-8 text-sm">
                   <SelectValue placeholder="请选择默认通道" />
                 </SelectTrigger>
                 <SelectContent>
-                  {allChannels.map((channel) => (
+                  {selectableChannels.map((channel) => (
                     <SelectItem key={channel.id} value={channel.id}>
                       {channel.name}
                     </SelectItem>

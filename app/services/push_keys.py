@@ -21,6 +21,9 @@ def push_key_load_options():
         selectinload(PushKey.channel_links)
         .selectinload(PushKeyChannel.channel)
         .selectinload(Channel.user_permissions),
+        selectinload(PushKey.channel_links)
+        .selectinload(PushKeyChannel.channel)
+        .selectinload(Channel.group_permissions),
         selectinload(PushKey.default_channel),
     )
 

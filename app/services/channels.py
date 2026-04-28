@@ -4,7 +4,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.crypto import encrypt_secret
 from app.models.channel import Channel, UserChannelPermission
+from app.models.group import UserGroupChannelPermission, UserGroupMember
 from app.models.user import User
 from app.schemas.channels import ChannelCreate, ChannelUpdate
 
@@ -12,6 +14,7 @@ from app.schemas.channels import ChannelCreate, ChannelUpdate
 def channel_load_options():
     return (
         selectinload(Channel.user_permissions),
+        selectinload(Channel.group_permissions),
         selectinload(Channel.created_by),
     )
 
@@ -25,13 +28,15 @@ async def list_channels_for_user(
     query = select(Channel).where(Channel.is_deleted.is_(False))
     count_query = select(func.count()).select_from(Channel).where(Channel.is_deleted.is_(False))
     if user.role.value != "admin":
-        query = query.join(UserChannelPermission).where(UserChannelPermission.user_id == user.id)
-        count_query = count_query.join(UserChannelPermission).where(
-            UserChannelPermission.user_id == user.id
-        )
+        authorized_channel_ids = await list_authorized_channel_ids(session, user.id)
+        if not authorized_channel_ids:
+            return [], 0
+        query = query.where(Channel.id.in_(authorized_channel_ids))
+        count_query = count_query.where(Channel.id.in_(authorized_channel_ids))
 
     query = (
         query.options(*channel_load_options())
+        .distinct()
         .order_by(Channel.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -55,7 +60,7 @@ async def create_channel(session: AsyncSession, user: User, payload: ChannelCrea
         name=payload.name,
         type=payload.type,
         webhook_url=payload.webhook_url,
-        secret=payload.secret,
+        secret=encrypt_secret(payload.secret),
         is_enabled=payload.is_enabled,
         per_minute_limit=payload.per_minute_limit,
         created_by_id=user.id,
@@ -69,10 +74,13 @@ async def create_channel(session: AsyncSession, user: User, payload: ChannelCrea
 async def update_channel(
     session: AsyncSession, channel: Channel, payload: ChannelUpdate
 ) -> Channel:
-    for field in ("name", "webhook_url", "secret", "is_enabled", "per_minute_limit"):
-        value = getattr(payload, field)
-        if value is not None:
-            setattr(channel, field, value)
+    for field in ("name", "webhook_url", "is_enabled", "per_minute_limit"):
+        if field in payload.model_fields_set:
+            setattr(channel, field, getattr(payload, field))
+
+    if "secret" in payload.model_fields_set:
+        channel.secret = encrypt_secret(payload.secret)
+
     await session.commit()
     await session.refresh(channel)
     return await get_channel_by_id(session, channel.id)  # type: ignore[return-value]
@@ -102,7 +110,12 @@ async def set_channel_permission(
 
 
 async def list_authorized_channel_ids(session: AsyncSession, user_id: str) -> set[str]:
-    rows = await session.scalars(
+    direct_rows = await session.scalars(
         select(UserChannelPermission.channel_id).where(UserChannelPermission.user_id == user_id)
     )
-    return set(rows)
+    group_rows = await session.scalars(
+        select(UserGroupChannelPermission.channel_id)
+        .join(UserGroupMember, UserGroupMember.group_id == UserGroupChannelPermission.group_id)
+        .where(UserGroupMember.user_id == user_id)
+    )
+    return {*(set(direct_rows)), *(set(group_rows))}

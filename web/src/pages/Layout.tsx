@@ -3,13 +3,16 @@ import { useAuth } from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/theme-toggle"
 import {
+  ClipboardList,
   LayoutDashboard,
-  Radio,
   KeyRound,
-  Mail,
-  Users,
   LogOut,
   Menu,
+  Radio,
+  Shield,
+  UserRound,
+  Users,
+  Mail,
   X,
 } from "lucide-react"
 import { useState } from "react"
@@ -19,9 +22,14 @@ const navItems = [
   { path: "/channels", label: "通道管理", icon: Radio },
   { path: "/push-keys", label: "推送密钥", icon: KeyRound },
   { path: "/messages", label: "消息记录", icon: Mail },
+  { path: "/profile", label: "个人设置", icon: UserRound },
 ]
 
-const adminNavItems = [{ path: "/users", label: "用户管理", icon: Users }]
+const adminNavItems = [
+  { path: "/users", label: "用户管理", icon: Users },
+  { path: "/groups", label: "用户组", icon: Shield },
+  { path: "/audit-logs", label: "审计日志", icon: ClipboardList },
+]
 const roleLabels = {
   admin: "管理员",
   user: "普通用户",

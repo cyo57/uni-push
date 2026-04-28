@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { Link, useSearchParams } from "react-router-dom"
 import { useAuth } from "@/hooks/useAuth"
 import {
   getChannels,
@@ -9,6 +10,7 @@ import {
   testChannel,
   grantChannelPermission,
   revokeChannelPermission,
+  getGroups,
   getUsers,
 } from "@/lib/api"
 import type { ChannelCreate, ChannelUpdate, ChannelOut, ChannelType } from "@/lib/api"
@@ -70,6 +72,8 @@ const PAGE_SIZE = 10
 const typeLabels: Record<ChannelType, string> = {
   wecom_bot: "企业微信机器人",
   dingtalk_bot: "钉钉机器人",
+  feishu_bot: "飞书机器人",
+  generic_webhook: "自定义 Webhook",
 }
 
 const roleLabels = {
@@ -80,6 +84,7 @@ const roleLabels = {
 export function ChannelsPage() {
   const { isAdmin } = useAuth()
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingChannel, setEditingChannel] = useState<ChannelOut | null>(null)
@@ -96,10 +101,16 @@ export function ChannelsPage() {
   const [permChannel, setPermChannel] = useState<ChannelOut | null>(null)
   const [permissionUserIds, setPermissionUserIds] = useState<string[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const highlightedId = searchParams.get("highlight")
 
   const { data, isLoading } = useQuery({
     queryKey: ["channels", page],
     queryFn: () => getChannels(page * PAGE_SIZE, PAGE_SIZE),
+  })
+
+  const { data: groupsData } = useQuery({
+    queryKey: ["groups", "all"],
+    queryFn: () => getGroups(0, 200),
   })
 
   const { data: usersData } = useQuery({
@@ -189,7 +200,7 @@ export function ChannelsPage() {
       if (payload.name !== editingChannel.name) updatePayload.name = payload.name
       if (payload.type !== editingChannel.type) updatePayload.type = payload.type
       if (payload.webhook_url !== editingChannel.webhook_url) updatePayload.webhook_url = payload.webhook_url
-      if (payload.secret !== (editingChannel.secret || undefined)) updatePayload.secret = payload.secret
+      if (payload.secret) updatePayload.secret = payload.secret
       if (payload.is_enabled !== editingChannel.is_enabled) updatePayload.is_enabled = payload.is_enabled
       if (payload.per_minute_limit !== editingChannel.per_minute_limit) updatePayload.per_minute_limit = payload.per_minute_limit
       updateMutation.mutate({ id: editingChannel.id, payload: updatePayload })
@@ -254,6 +265,7 @@ export function ChannelsPage() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const totalPages = Math.ceil(total / PAGE_SIZE)
+  const groupsById = new Map((groupsData?.items ?? []).map((group) => [group.id, group]))
 
   return (
     <div className="space-y-5">
@@ -278,6 +290,7 @@ export function ChannelsPage() {
               <TableHead className="text-xs font-medium text-muted-foreground h-9">类型</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">状态</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">每分钟限流</TableHead>
+              <TableHead className="text-xs font-medium text-muted-foreground h-9">授权范围</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">创建时间</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9 text-right">操作</TableHead>
             </TableRow>
@@ -286,105 +299,142 @@ export function ChannelsPage() {
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i} className="border-border/40">
-                  <TableCell colSpan={6} className="py-3">
+                  <TableCell colSpan={7} className="py-3">
                     <Skeleton className="h-5 w-full" />
                   </TableCell>
                 </TableRow>
               ))
             ) : items.length === 0 ? (
               <TableRow className="border-border/40">
-                <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                   暂无通道
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((channel) => (
-                <TableRow key={channel.id} className="border-border/40">
-                  <TableCell className="py-3 text-sm font-medium">{channel.name}</TableCell>
-                  <TableCell className="py-3">
-                    <Badge variant="secondary" className="text-[10px] font-normal">
-                      {typeLabels[channel.type]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="py-3">
-                    {channel.is_enabled ? (
-                      <Badge variant="default" className="text-[10px] font-normal bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20">
-                        启用
+              items.map((channel) => {
+                const groupLinks = channel.authorized_group_ids
+                  .map((groupId) => groupsById.get(groupId))
+                  .filter((group): group is NonNullable<typeof group> => Boolean(group))
+
+                return (
+                  <TableRow
+                    key={channel.id}
+                    className={
+                      highlightedId === channel.id
+                        ? "border-l-2 border-l-primary bg-primary/5"
+                        : "border-border/40"
+                    }
+                  >
+                    <TableCell className="py-3 text-sm font-medium">{channel.name}</TableCell>
+                    <TableCell className="py-3">
+                      <Badge variant="secondary" className="text-[10px] font-normal">
+                        {typeLabels[channel.type]}
                       </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
-                        停用
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="py-3 text-sm text-muted-foreground">{channel.per_minute_limit}</TableCell>
-                  <TableCell className="py-3 text-sm text-muted-foreground">
-                    {formatDate(channel.created_at)}
-                  </TableCell>
-                  <TableCell className="py-3 text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => {
-                          navigator.clipboard.writeText(channel.id)
-                          setCopiedId(channel.id)
-                          toast.success("渠道 ID 已复制")
-                          setTimeout(() => setCopiedId(null), 1500)
-                        }}
-                        title="复制渠道 ID"
-                      >
-                        {copiedId === channel.id ? (
-                          <Check className="h-3.5 w-3.5 text-emerald-500" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
-                      </Button>
-                      {isAdmin && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => openTest(channel.id)}
-                            title="测试通道"
-                          >
-                            <TestTube className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => openPerm(channel)}
-                            title="权限管理"
-                          >
-                            <Users className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => openEdit(channel)}
-                            title="编辑通道"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => setDeleteId(channel.id)}
-                            title="删除通道"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
+                    </TableCell>
+                    <TableCell className="py-3">
+                      {channel.is_enabled ? (
+                        <Badge variant="default" className="bg-emerald-500/15 text-[10px] font-normal text-emerald-400 hover:bg-emerald-500/20">
+                          启用
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
+                          停用
+                        </Badge>
                       )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+                    </TableCell>
+                    <TableCell className="py-3 text-sm text-muted-foreground">
+                      {channel.per_minute_limit}
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[10px] font-normal">
+                          用户 {channel.authorized_user_ids.length}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          组 {channel.authorized_group_ids.length}
+                        </Badge>
+                        {groupLinks.slice(0, 2).map((group) => (
+                          <Link key={group.id} to={`/groups?highlight=${group.id}`}>
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              {group.name}
+                            </Badge>
+                          </Link>
+                        ))}
+                        {groupLinks.length > 2 ? (
+                          <Badge variant="secondary" className="text-[10px] font-normal">
+                            +{groupLinks.length - 2}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-3 text-sm text-muted-foreground">
+                      {formatDate(channel.created_at)}
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => {
+                            navigator.clipboard.writeText(channel.id)
+                            setCopiedId(channel.id)
+                            toast.success("渠道 ID 已复制")
+                            setTimeout(() => setCopiedId(null), 1500)
+                          }}
+                          title="复制渠道 ID"
+                        >
+                          {copiedId === channel.id ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-500" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                        {isAdmin && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => openTest(channel.id)}
+                              title="测试通道"
+                            >
+                              <TestTube className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => openPerm(channel)}
+                              title="权限管理"
+                            >
+                              <Users className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => openEdit(channel)}
+                              title="编辑通道"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => setDeleteId(channel.id)}
+                              title="删除通道"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>
@@ -452,6 +502,8 @@ export function ChannelsPage() {
                 <SelectContent>
                   <SelectItem value="wecom_bot">企业微信机器人</SelectItem>
                   <SelectItem value="dingtalk_bot">钉钉机器人</SelectItem>
+                  <SelectItem value="feishu_bot">飞书机器人</SelectItem>
+                  <SelectItem value="generic_webhook">自定义 Webhook</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -470,9 +522,14 @@ export function ChannelsPage() {
               <Input
                 id="secret"
                 name="secret"
-                defaultValue={editingChannel?.secret ?? ""}
+                defaultValue=""
                 className="h-8 text-sm"
               />
+              {editingChannel?.has_secret && (
+                <p className="text-[11px] text-muted-foreground">
+                  当前已配置密钥：{editingChannel.secret_preview ?? "已隐藏"}；留空则保持不变
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="per_minute_limit" className="text-xs font-medium">每分钟限流</Label>

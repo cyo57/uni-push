@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getUsers, createUser, updateUser } from "@/lib/api"
+import { Link, useSearchParams } from "react-router-dom"
+import { getChannels, getGroups, getUsers, createUser, updateUser } from "@/lib/api"
 import type { UserCreate, UserUpdate, UserOut } from "@/lib/api"
 import { formatDate } from "@/lib/format"
 import { Button } from "@/components/ui/button"
@@ -30,15 +31,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
-import {
-  Plus,
-  Pencil,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react"
+import { Blocks, ChevronLeft, ChevronRight, Pencil, Plus, Radio } from "lucide-react"
 
 const PAGE_SIZE = 10
 const roleLabels = {
@@ -48,14 +50,26 @@ const roleLabels = {
 
 export function UsersPage() {
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<UserOut | null>(null)
   const [userActive, setUserActive] = useState(true)
+  const highlightedId = searchParams.get("highlight")
 
   const { data, isLoading } = useQuery({
     queryKey: ["users", page],
     queryFn: () => getUsers(page * PAGE_SIZE, PAGE_SIZE),
+  })
+
+  const { data: groupsData } = useQuery({
+    queryKey: ["groups", "all"],
+    queryFn: () => getGroups(0, 200),
+  })
+
+  const { data: channelsData } = useQuery({
+    queryKey: ["channels", "all"],
+    queryFn: () => getChannels(0, 200),
   })
 
   const createMutation = useMutation({
@@ -120,6 +134,8 @@ export function UsersPage() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const totalPages = Math.ceil(total / PAGE_SIZE)
+  const groupsById = new Map((groupsData?.items ?? []).map((group) => [group.id, group]))
+  const channels = channelsData?.items ?? []
 
   return (
     <div className="space-y-5">
@@ -134,6 +150,7 @@ export function UsersPage() {
         </Button>
       </div>
 
+      <TooltipProvider>
       <div className="rounded-lg border border-border/60 overflow-hidden">
         <Table>
           <TableHeader>
@@ -141,6 +158,8 @@ export function UsersPage() {
               <TableHead className="text-xs font-medium text-muted-foreground h-9">用户名</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">显示名称</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">角色</TableHead>
+              <TableHead className="text-xs font-medium text-muted-foreground h-9">所属组</TableHead>
+              <TableHead className="text-xs font-medium text-muted-foreground h-9">可用通道</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">状态</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9">创建时间</TableHead>
               <TableHead className="text-xs font-medium text-muted-foreground h-9 text-right">操作</TableHead>
@@ -150,7 +169,7 @@ export function UsersPage() {
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i} className="border-border/40">
-                  <TableCell colSpan={6} className="py-3">
+                  <TableCell colSpan={8} className="py-3">
                     <Skeleton className="h-5 w-full" />
                   </TableCell>
                 </TableRow>
@@ -158,15 +177,38 @@ export function UsersPage() {
             ) : items.length === 0 ? (
               <TableRow className="border-border/40">
                 <TableCell
-                  colSpan={6}
+                  colSpan={8}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
                   暂无用户
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((user) => (
-                <TableRow key={user.id} className="border-border/40">
+              items.map((user) => {
+                const groupLinks = user.group_ids
+                  .map((groupId) => groupsById.get(groupId))
+                  .filter((group): group is NonNullable<typeof group> => Boolean(group))
+                const directChannels = channels.filter((channel) =>
+                  channel.authorized_user_ids.includes(user.id)
+                )
+                const inheritedChannels = channels.filter((channel) =>
+                  channel.authorized_group_ids.some((groupId) => user.group_ids.includes(groupId))
+                )
+                const accessibleChannels = Array.from(
+                  new Map(
+                    [...directChannels, ...inheritedChannels].map((channel) => [channel.id, channel])
+                  ).values()
+                )
+
+                return (
+                <TableRow
+                  key={user.id}
+                  className={
+                    highlightedId === user.id
+                      ? "border-l-2 border-l-primary bg-primary/5"
+                      : "border-border/40"
+                  }
+                >
                   <TableCell className="py-3 text-sm font-medium">{user.username}</TableCell>
                   <TableCell className="py-3 text-sm">{user.display_name}</TableCell>
                   <TableCell className="py-3">
@@ -180,6 +222,68 @@ export function UsersPage() {
                     >
                       {roleLabels[user.role]}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="py-3">
+                    {groupLinks.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <Badge variant="outline" className="gap-1 text-[10px] font-normal">
+                              <Blocks className="h-3 w-3" />
+                              {groupLinks.length} 个组
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {groupLinks.map((group) => group.name).join("、")}
+                          </TooltipContent>
+                        </Tooltip>
+                        {groupLinks.slice(0, 2).map((group) => (
+                          <Link key={group.id} to={`/groups?highlight=${group.id}`}>
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              {group.name}
+                            </Badge>
+                          </Link>
+                        ))}
+                        {groupLinks.length > 2 ? (
+                          <Badge variant="secondary" className="text-[10px] font-normal">
+                            +{groupLinks.length - 2}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-3">
+                    {accessibleChannels.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <Badge variant="outline" className="gap-1 text-[10px] font-normal">
+                              <Radio className="h-3 w-3" />
+                              {accessibleChannels.length} 条
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            直授 {directChannels.length} / 继承 {inheritedChannels.length}
+                          </TooltipContent>
+                        </Tooltip>
+                        {accessibleChannels.slice(0, 2).map((channel) => (
+                          <Link key={channel.id} to={`/channels?highlight=${channel.id}`}>
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              {channel.name}
+                            </Badge>
+                          </Link>
+                        ))}
+                        {accessibleChannels.length > 2 ? (
+                          <Badge variant="secondary" className="text-[10px] font-normal">
+                            +{accessibleChannels.length - 2}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                   <TableCell className="py-3">
                     {user.is_active ? (
@@ -207,11 +311,12 @@ export function UsersPage() {
                     </Button>
                   </TableCell>
                 </TableRow>
-              ))
+              )})
             )}
           </TableBody>
         </Table>
       </div>
+      </TooltipProvider>
 
       {totalPages > 1 && (
         <div className="flex items-center justify-end gap-2">

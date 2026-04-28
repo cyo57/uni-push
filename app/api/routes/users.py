@@ -6,6 +6,7 @@ from app.api.deps import require_admin
 from app.db.session import get_session
 from app.models.user import User
 from app.schemas.users import UserCreate, UserListOut, UserOut, UserUpdate
+from app.services.audit import record_audit_log
 from app.services.serializers import user_to_out
 from app.services.users import create_user, list_users, update_user
 
@@ -26,7 +27,7 @@ async def get_users(
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def post_user(
     payload: UserCreate,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
     try:
@@ -36,6 +37,15 @@ async def post_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Username already exists"
         ) from exc
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="user.create",
+        target_type="user",
+        target_id=user.id,
+        detail={"username": user.username, "role": user.role.value},
+    )
+    await session.commit()
     return user_to_out(user)
 
 
@@ -43,7 +53,7 @@ async def post_user(
 async def patch_user(
     user_id: str,
     payload: UserUpdate,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> UserOut:
     user = await session.get(User, user_id)
@@ -56,4 +66,13 @@ async def patch_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Username conflict"
         ) from exc
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="user.update",
+        target_type="user",
+        target_id=updated.id,
+        detail=payload.model_dump(exclude_none=True),
+    )
+    await session.commit()
     return user_to_out(updated)

@@ -21,9 +21,14 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production-please-use-a-long-secret"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 720
+    data_encryption_key: str | None = None
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     log_retention_days: int = 30
     http_timeout_seconds: float = 10.0
+    login_rate_limit_per_minute: int = 10
+    sensitive_log_max_bytes: int = 1024
+    delivery_stale_after_seconds: int = 300
+    worker_heartbeat_ttl_seconds: int = 180
     bootstrap_admin_username: str = "admin"
     bootstrap_admin_password: str = "admin123456"
     bootstrap_admin_display_name: str = "平台管理员"
@@ -50,7 +55,13 @@ class Settings(BaseSettings):
             return str(url.set(drivername="sqlite"))
         if drivername == "postgresql+asyncpg":
             return str(url.set(drivername="postgresql+psycopg"))
+        if drivername in {"mysql+asyncmy", "mysql+aiomysql"}:
+            return str(url.set(drivername="mysql+pymysql"))
         return self.database_url
+
+    @property
+    def effective_data_encryption_key(self) -> str:
+        return self.data_encryption_key or self.jwt_secret
 
     @property
     def masked_settings(self) -> dict[str, Any]:
@@ -59,6 +70,10 @@ class Settings(BaseSettings):
             "redis_url": self.redis_url,
             "debug": self.debug,
             "cors_origins": self.cors_origins,
+            "login_rate_limit_per_minute": self.login_rate_limit_per_minute,
+            "sensitive_log_max_bytes": self.sensitive_log_max_bytes,
+            "delivery_stale_after_seconds": self.delivery_stale_after_seconds,
+            "worker_heartbeat_ttl_seconds": self.worker_heartbeat_ttl_seconds,
         }
 
 

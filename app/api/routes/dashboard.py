@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -9,12 +9,16 @@ from app.core.enums import DeliveryStatus
 from app.db.session import get_session
 from app.models.channel import Channel
 from app.models.message import Delivery, Message
+from app.models.push_key import PushKey
 from app.models.user import User
 from app.schemas.dashboard import (
+    ChannelPerformanceStat,
     ChannelUsage,
     DailyRequest,
     DashboardStats,
     DashboardSummary,
+    ErrorReasonStat,
+    HotPushKeyStat,
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -27,6 +31,21 @@ def _days_ago(days: int) -> datetime:
 
 def _format_date(dt: datetime) -> str:
     return dt.strftime("%m.%d")
+
+
+def _day_bucket_expression(session: AsyncSession):
+    dialect = session.bind.dialect.name if session.bind is not None else ""
+    if dialect == "postgresql":
+        return func.to_char(func.date_trunc("day", Message.created_at), "YYYY-MM-DD")
+    if dialect == "mysql":
+        return func.date_format(Message.created_at, "%Y-%m-%d")
+    return func.strftime("%Y-%m-%d", Message.created_at)
+
+
+def _apply_message_user_scope(query, current_user: User):
+    if current_user.role.value != "admin":
+        query = query.where(Message.user_id == current_user.id)
+    return query
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -83,18 +102,21 @@ async def get_dashboard_stats(
 
     total_users_query = select(func.count()).select_from(User)
     total_channels_query = (
-        select(func.count()).select_from(Channel).where(Channel.is_deleted == False)  # noqa: E712
+        select(func.count()).select_from(Channel).where(Channel.is_deleted.is_(False))
     )
     total_messages_query = select(func.count()).select_from(Message)
-    recent_requests_query = select(func.count()).select_from(Message).where(Message.created_at >= cutoff)
+    recent_requests_query = (
+        select(func.count()).select_from(Message).where(Message.created_at >= cutoff)
+    )
 
     if current_user.role.value != "admin":
+        from app.services.channels import list_authorized_channel_ids
+
         total_users_query = total_users_query.where(User.id == current_user.id)
         total_messages_query = total_messages_query.where(Message.user_id == current_user.id)
         recent_requests_query = recent_requests_query.where(Message.user_id == current_user.id)
-        # 非管理员只能看到自己创建的通道
         total_channels_query = total_channels_query.where(
-            Channel.created_by_id == current_user.id
+            Channel.id.in_(await list_authorized_channel_ids(session, current_user.id))
         )
 
     total_users = await session.scalar(total_users_query)
@@ -118,15 +140,15 @@ async def get_dashboard_requests(
 ) -> list[DailyRequest]:
     cutoff = _days_ago(days)
 
-    # SQLite strftime 分组
+    day_bucket = _day_bucket_expression(session)
     query = (
         select(
-            func.strftime("%m.%d", Message.created_at).label("date"),
+            day_bucket.label("date"),
             func.count().label("count"),
         )
         .where(Message.created_at >= cutoff)
-        .group_by(func.strftime("%m.%d", Message.created_at))
-        .order_by(func.strftime("%m.%d", Message.created_at))
+        .group_by(day_bucket)
+        .order_by(day_bucket)
     )
 
     if current_user.role.value != "admin":
@@ -140,8 +162,8 @@ async def get_dashboard_requests(
     filled: list[DailyRequest] = []
     for i in range(days - 1, -1, -1):
         d = _days_ago(i)
-        date_str = _format_date(d)
-        filled.append(DailyRequest(date=date_str, value=date_counts.get(date_str, 0)))
+        bucket = d.date().isoformat()
+        filled.append(DailyRequest(date=_format_date(d), value=date_counts.get(bucket, 0)))
 
     return filled
 
@@ -164,8 +186,8 @@ async def get_dashboard_channels(
         )
         .join(Delivery, Delivery.channel_id == Channel.id)
         .where(
-            Channel.is_deleted == False,  # noqa: E712
-            Channel.is_enabled == True,  # noqa: E712
+            Channel.is_deleted.is_(False),
+            Channel.is_enabled.is_(True),
         )
         .group_by(Channel.type)
     )
@@ -186,3 +208,101 @@ async def get_dashboard_channels(
         )
         for row in rows
     ]
+
+
+@router.get("/error-reasons", response_model=list[ErrorReasonStat])
+async def get_dashboard_error_reasons(
+    days: int = Query(default=7, ge=1, le=90),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ErrorReasonStat]:
+    cutoff = _days_ago(days)
+    query = (
+        select(
+            func.coalesce(Delivery.final_error, "Unknown error").label("reason"),
+            func.count().label("count"),
+        )
+        .join(Message, Message.id == Delivery.message_id)
+        .where(
+            Delivery.created_at >= cutoff,
+            Delivery.status.in_([DeliveryStatus.FAILED, DeliveryStatus.DEAD_LETTER]),
+        )
+        .group_by("reason")
+        .order_by(func.count().desc(), "reason")
+        .limit(5)
+    )
+    query = _apply_message_user_scope(query, current_user)
+    rows = (await session.execute(query)).all()
+    return [ErrorReasonStat(reason=row.reason, count=row.count) for row in rows]
+
+
+@router.get("/hot-keys", response_model=list[HotPushKeyStat])
+async def get_dashboard_hot_keys(
+    days: int = Query(default=7, ge=1, le=90),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[HotPushKeyStat]:
+    cutoff = _days_ago(days)
+    query = (
+        select(
+            PushKey.business_name.label("business_name"),
+            func.count(Message.id).label("count"),
+        )
+        .join(PushKey, PushKey.id == Message.push_key_id)
+        .where(Message.created_at >= cutoff)
+        .group_by(PushKey.business_name)
+        .order_by(func.count(Message.id).desc(), PushKey.business_name.asc())
+        .limit(5)
+    )
+    query = _apply_message_user_scope(query, current_user)
+    rows = (await session.execute(query)).all()
+    return [HotPushKeyStat(business_name=row.business_name, count=row.count) for row in rows]
+
+
+@router.get("/channel-performance", response_model=list[ChannelPerformanceStat])
+async def get_dashboard_channel_performance(
+    days: int = Query(default=7, ge=1, le=90),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ChannelPerformanceStat]:
+    cutoff = _days_ago(days)
+    query = (
+        select(
+            Channel.name.label("channel_name"),
+            Channel.type.label("channel_type"),
+            func.sum(case((Delivery.status == DeliveryStatus.SUCCESS, 1), else_=0)).label(
+                "success_count"
+            ),
+            func.sum(
+                case(
+                    (
+                        Delivery.status.in_([DeliveryStatus.FAILED, DeliveryStatus.DEAD_LETTER]),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("failed_count"),
+        )
+        .join(Delivery, Delivery.channel_id == Channel.id)
+        .join(Message, Message.id == Delivery.message_id)
+        .where(Delivery.created_at >= cutoff)
+        .group_by(Channel.id, Channel.name, Channel.type)
+        .order_by(Channel.name.asc())
+    )
+    query = _apply_message_user_scope(query, current_user)
+    rows = (await session.execute(query)).all()
+    result: list[ChannelPerformanceStat] = []
+    for row in rows:
+        success_count = int(row.success_count or 0)
+        failed_count = int(row.failed_count or 0)
+        total = success_count + failed_count
+        result.append(
+            ChannelPerformanceStat(
+                channel_name=row.channel_name,
+                channel_type=row.channel_type,
+                success_count=success_count,
+                failed_count=failed_count,
+                success_rate=round((success_count / total) * 100, 2) if total > 0 else 0.0,
+            )
+        )
+    return result

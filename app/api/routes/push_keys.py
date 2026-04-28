@@ -11,6 +11,7 @@ from app.schemas.push_keys import (
     PushKeyUpdate,
     PushKeyWithSecret,
 )
+from app.services.audit import record_audit_log
 from app.services.push_keys import (
     create_push_key,
     get_push_key_for_user,
@@ -47,6 +48,19 @@ async def post_push_key(
     session: AsyncSession = Depends(get_session),
 ) -> PushKeyWithSecret:
     push_key, plaintext_key = await create_push_key(session, current_user, payload)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="push_key.create",
+        target_type="push_key",
+        target_id=push_key.id,
+        detail={
+            "business_name": push_key.business_name,
+            "default_channel_id": push_key.default_channel_id,
+            "channel_ids": payload.channel_ids,
+        },
+    )
+    await session.commit()
     return push_key_to_out(
         push_key,
         plaintext_key=plaintext_key,
@@ -65,6 +79,15 @@ async def patch_push_key(
     if push_key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Push key not found")
     updated = await update_push_key(session, push_key, current_user, payload)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="push_key.update",
+        target_type="push_key",
+        target_id=updated.id,
+        detail=payload.model_dump(exclude_none=True),
+    )
+    await session.commit()
     return push_key_to_out(updated, include_channel_secrets=current_user.role.value == "admin")
 
 
@@ -78,6 +101,15 @@ async def post_push_key_rotate(
     if push_key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Push key not found")
     updated, plaintext_key = await rotate_push_key(session, push_key, current_user)
+    await record_audit_log(
+        session,
+        actor=current_user,
+        action="push_key.rotate",
+        target_type="push_key",
+        target_id=updated.id,
+        detail={"business_name": updated.business_name},
+    )
+    await session.commit()
     return push_key_to_out(
         updated,
         plaintext_key=plaintext_key,
